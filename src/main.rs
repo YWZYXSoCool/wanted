@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use wanted::cli::ToolSpec;
 use wanted::engine::execute;
 use wanted::engine::{Ctx, Fs, RealDownloader, RealFs};
 use wanted::env::store::RealEnvStore;
@@ -29,7 +30,7 @@ enum Commands {
     #[command(alias = "i")]
     Install {
         /// Tool spec, optionally pinned as `name@version`.
-        tools: Vec<String>,
+        tools: Vec<ToolSpec>,
         /// Override the plugin manifest path (default `plugins/<name>.toml`).
         #[arg(long)]
         source: Option<PathBuf>,
@@ -107,12 +108,12 @@ fn add_plugin(source: &PathBuf) -> wanted::Result<()> {
 }
 
 fn install(
-    spec: &str,
+    spec: &ToolSpec,
     manifest_override: Option<PathBuf>,
     asset_source: Option<&str>,
 ) -> wanted::Result<()> {
-    let name = tool_name(spec);
-    let version = tool_version(spec);
+    let name = spec.name();
+    let version = spec.version();
     let store = store_at_cwd();
 
     let manifest_path =
@@ -122,7 +123,7 @@ fn install(
     let plan = manifest.plan(
         store.root(),
         &wanted::plugin::Target::current(),
-        &version,
+        version,
         asset_source,
     )?;
 
@@ -267,14 +268,4 @@ fn plugins_dir() -> PathBuf {
         .ok()
         .and_then(|exe| exe.parent().map(|dir| dir.join("plugins")))
         .unwrap_or_else(|| PathBuf::from("plugins"))
-}
-
-/// The name before `@`; the whole spec is the name when there is no `@`.
-fn tool_name(spec: &str) -> &str {
-    spec.split('@').next().unwrap()
-}
-
-/// The version after `@`; falls back to `latest` when there is no `@`.
-fn tool_version(spec: &str) -> String {
-    spec.split('@').nth(1).unwrap_or("latest").to_string()
 }

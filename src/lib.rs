@@ -7,6 +7,7 @@
 //! Key invariants: **planning is a pure function**, and **every side effect
 //! carries its own undo action (compensation)**, so any step can be rolled back.
 
+pub mod cli;
 pub mod engine;
 pub mod env;
 pub mod error;
