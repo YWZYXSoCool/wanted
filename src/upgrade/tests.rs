@@ -55,17 +55,30 @@ impl Downloader for StubDownloader {
     }
 }
 
-/// A release that downloads `NEW` and serves its real checksum for `os`.
-fn stub_for(tag: &str, os: &str) -> StubDownloader {
+/// The download URL in [`release_json`] for the asset of host `os`.
+///
+/// Kept in lockstep with the `release_json` fixture so the stub serves exactly
+/// the asset [`Upgrader`] picks via `std::env::consts::OS`, on any platform.
+fn asset_url(tag: &str, os: &str) -> String {
+    match os {
+        "linux" => format!("https://ex/l-{tag}"),
+        "windows" => format!("https://ex/w-{tag}.exe"),
+        "macos" => format!("https://ex/m-{tag}"),
+        other => panic!("unexpected host os: {other}"),
+    }
+}
+
+/// A release that downloads `NEW` and serves its real checksum for the *host*
+/// platform, so the swap tests are platform-neutral.
+fn stub_for(tag: &str) -> StubDownloader {
     let mut files = HashMap::new();
     files.insert(RELEASES_URL.to_string(), release_json(tag).into_bytes());
-    let exe = format!("https://ex/w-{tag}.exe");
+    let exe = asset_url(tag, std::env::consts::OS);
     files.insert(exe.clone(), NEW.to_vec());
     files.insert(
         format!("{exe}.sha256"),
-        format!("{}  wanted.exe", digest(NEW)).into_bytes(),
+        format!("{}  wanted.bin", digest(NEW)).into_bytes(),
     );
-    let _ = os;
     StubDownloader::new(files)
 }
 
@@ -116,7 +129,7 @@ fn upgrade_is_up_to_date_without_changes() {
     fs.write(Path::new("bin/wanted.exe"), OLD).unwrap();
     let current = semver::Version::new(0, 9, 0);
 
-    let outcome = Upgrader::new(&fs, &stub_for("v0.2.0", "windows"), &SilentReporter)
+    let outcome = Upgrader::new(&fs, &stub_for("v0.2.0"), &SilentReporter)
         .run(Path::new("bin/wanted.exe"), &current)
         .expect("runs");
 
@@ -132,7 +145,7 @@ fn upgrade_swaps_binary_and_keeps_backup() {
     fs.write(Path::new("bin/wanted.exe"), OLD).unwrap();
     let current = semver::Version::new(0, 1, 0);
 
-    let outcome = Upgrader::new(&fs, &stub_for("v0.2.0", "windows"), &SilentReporter)
+    let outcome = Upgrader::new(&fs, &stub_for("v0.2.0"), &SilentReporter)
         .run(Path::new("bin/wanted.exe"), &current)
         .expect("runs");
 
@@ -152,11 +165,11 @@ fn upgrade_rejects_checksum_mismatch_and_leaves_binary_untouched() {
         RELEASES_URL.to_string(),
         release_json("v0.2.0").into_bytes(),
     );
-    let exe = "https://ex/w-v0.2.0.exe";
-    files.insert(exe.to_string(), NEW.to_vec());
+    let exe = asset_url("v0.2.0", std::env::consts::OS);
+    files.insert(exe.clone(), NEW.to_vec());
     files.insert(
         format!("{exe}.sha256"),
-        format!("{}  wanted.exe", digest(OLD)).into_bytes(),
+        format!("{}  wanted.bin", digest(OLD)).into_bytes(),
     );
     let downloader = StubDownloader::new(files);
 
@@ -217,7 +230,7 @@ fn failed_swap_restores_previous_binary() {
     };
     fs.inner.write(&exe, OLD).unwrap();
 
-    let err = Upgrader::new(&fs, &stub_for("v0.2.0", "windows"), &SilentReporter)
+    let err = Upgrader::new(&fs, &stub_for("v0.2.0"), &SilentReporter)
         .run(&exe, &semver::Version::new(0, 1, 0))
         .expect_err("rename of .part denied");
 

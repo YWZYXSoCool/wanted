@@ -122,7 +122,7 @@ fn uninstall_of_earlier_app_preserves_later_app_path() {
     // B's segment must survive.
     assert_eq!(
         env.read("PATH").unwrap().unwrap(),
-        "/root/.wanted/apps/golang/bin;/usr/bin"
+        format!("/root/.wanted/apps/golang/bin{PATH_SEP}/usr/bin")
     );
     // Uninstall B leaves only the original PATH.
     apply_receipt(&receipt_b, &fs, &env).unwrap();
