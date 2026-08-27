@@ -1,6 +1,36 @@
 //! Plugin manifest parsing tests.
 
-use super::{EnvBox, InstallMethod, Manifest};
+use super::{EnvBox, InstallMethod, Manifest, Target};
+
+const COMPONENT_TOML: &str = r#"
+[meta]
+name = "llvm"
+version = "1.0.0"
+
+[install]
+method = "download"
+base_dir = "llvm"
+asset = { "x86_64-pc-windows-msvc" = { default = "https://ex/llvm-{version}.zip" } }
+
+[install.component]
+"clang" = { "x86_64-pc-windows-msvc" = { default = "https://ex/clang-{version}.zip" } }
+"#;
+
+#[test]
+fn parses_optional_components() {
+    let manifest = Manifest::parse(COMPONENT_TOML).unwrap();
+    let clang = &manifest.install.components["clang"];
+    assert_eq!(
+        clang["x86_64-pc-windows-msvc"]["default"],
+        "https://ex/clang-{version}.zip"
+    );
+}
+
+#[test]
+fn components_default_to_empty_when_absent() {
+    let manifest = Manifest::parse(GOLANG_TOML).unwrap();
+    assert!(manifest.install.components.is_empty());
+}
 
 const GOLANG_TOML: &str = r#"
 [meta]
@@ -52,6 +82,103 @@ version = "1.0.0"
 [install]
 method = "download"
 base_dir = "x"
+"#;
+    assert!(Manifest::parse(source).is_err());
+}
+
+const STRATEGY_TOML: &str = r#"
+[meta]
+name = "llvm"
+version = "1.0.0"
+
+[install]
+method = "download"
+base_dir = "llvm"
+asset = { "x86_64-pc-windows-msvc" = { default = "https://ex/LLVM-{version}-win64.exe" }, "x86_64-unknown-linux-gnu" = { default = "https://ex/llvm-{version}.tar.xz" } }
+
+[install.strategy]
+"x86_64-pc-windows-msvc" = { method = "installer", args = ["/S", "/DIR={base}"] }
+"#;
+
+#[test]
+fn parses_per_platform_strategy() {
+    let manifest = Manifest::parse(STRATEGY_TOML).unwrap();
+    assert_eq!(manifest.install.strategy.len(), 1);
+    assert_eq!(
+        manifest.install.strategy["x86_64-pc-windows-msvc"].method,
+        InstallMethod::Installer
+    );
+    assert_eq!(
+        manifest.install.strategy["x86_64-pc-windows-msvc"].args,
+        ["/S", "/DIR={base}"]
+    );
+}
+
+#[test]
+fn method_for_hits_strategy_on_windows_and_falls_back_on_linux() {
+    let manifest = Manifest::parse(STRATEGY_TOML).unwrap();
+    let windows = Target::parts("x86_64", "windows", "msvc");
+    let linux = Target::parts("x86_64", "linux", "gnu");
+    let (win_method, win_args) = manifest.install.method_for(&windows);
+    let (linux_method, linux_args) = manifest.install.method_for(&linux);
+    assert_eq!(*win_method, InstallMethod::Installer);
+    assert_eq!(win_args, ["/S", "/DIR={base}"]);
+    assert_eq!(*linux_method, InstallMethod::Download);
+    assert!(linux_args.is_empty());
+}
+
+#[test]
+fn installer_also_requires_assets() {
+    let source = r#"
+[meta]
+name = "llvm"
+version = "1.0.0"
+[install]
+method = "installer"
+base_dir = "llvm"
+"#;
+    assert!(Manifest::parse(source).is_err());
+}
+
+const COMMAND_TOML: &str = r#"
+[meta]
+name = "bat"
+version = "1.0.0"
+
+[install]
+method = "command"
+base_dir = "bat"
+
+[install.command]
+"x86_64-pc-windows-msvc" = [
+  { tool = "cargo", args = ["install", "--root", "{base}", "bat"], env = { CARGO_INSTALL_ROOT = "{base}" } },
+  { tool = "npm", args = ["install", "--prefix", "{base}", "bat"] },
+]
+"#;
+
+#[test]
+fn parses_command_install_method() {
+    let manifest = Manifest::parse(COMMAND_TOML).unwrap();
+    assert_eq!(manifest.install.method, InstallMethod::Command);
+    assert_eq!(manifest.install.commands.len(), 1);
+    let commands = &manifest.install.commands["x86_64-pc-windows-msvc"];
+    assert_eq!(commands.len(), 2);
+    assert_eq!(commands[0].tool, "cargo");
+    assert_eq!(commands[0].args, ["install", "--root", "{base}", "bat"]);
+    assert_eq!(commands[0].env["CARGO_INSTALL_ROOT"], "{base}");
+    assert_eq!(commands[1].tool, "npm");
+    assert!(commands[1].env.is_empty());
+}
+
+#[test]
+fn rejects_command_without_commands() {
+    let source = r#"
+[meta]
+name = "bat"
+version = "1.0.0"
+[install]
+method = "command"
+base_dir = "bat"
 "#;
     assert!(Manifest::parse(source).is_err());
 }

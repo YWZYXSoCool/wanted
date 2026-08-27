@@ -5,38 +5,21 @@
 
 pub mod target;
 
+pub mod raw;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use serde::Deserialize;
-
 use crate::Result;
 use crate::error::Error;
+
+use raw::RawManifest;
+pub use raw::{AssetMap, EnvBox, InstallMethod, RawCommand, RawStrategy};
 
 pub use target::Target;
 
 /// The default source name used when none is explicitly requested.
 pub(crate) const DEFAULT_SOURCE: &str = "default";
-
-/// Install method.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum InstallMethod {
-    /// Extract the vendor-distributed archive directly.
-    Download,
-    /// Delegate to a system package manager (`winget` / `brew`); not wired in M0.
-    System,
-}
-
-/// The PATH box (prepend or append).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum EnvBox {
-    /// Prepend.
-    Prepend,
-    /// Append.
-    Append,
-}
 
 /// Manifest metadata.
 #[derive(Clone, Debug)]
@@ -52,14 +35,23 @@ pub struct Meta {
 /// Install section.
 #[derive(Clone, Debug)]
 pub struct Install {
-    /// Install method.
+    /// Default install method.
     pub method: InstallMethod,
     /// Platform triplet -> source name -> URL template (with `{version}`).
-    pub assets: BTreeMap<String, BTreeMap<String, String>>,
+    pub assets: AssetMap,
+    /// Optional components (platform-keyed like `assets`), downloaded only when enabled.
+    pub components: BTreeMap<String, AssetMap>,
     /// Placement path relative to `apps`.
     pub base_dir: String,
     /// The PATH box.
     pub env_box: EnvBox,
+    /// Default silent-install arguments (with `{base}`), used by the `installer` method.
+    pub args: Vec<String>,
+    /// Per-platform override of method and silent arguments.
+    pub strategy: BTreeMap<String, RawStrategy>,
+    /// External install commands for the `command` method, keyed by platform
+    /// triplet; the ordered list is tried in fallback order until one succeeds.
+    pub commands: BTreeMap<String, Vec<RawCommand>>,
 }
 
 /// A validated plugin manifest.
@@ -96,9 +88,18 @@ impl Manifest {
         let version = raw.meta.version.ok_or(Error::MissingField {
             field: "meta.version",
         })?;
-        if raw.install.method == InstallMethod::Download && raw.install.asset.is_empty() {
+        if matches!(
+            raw.install.method,
+            InstallMethod::Download | InstallMethod::Installer
+        ) && raw.install.asset.is_empty()
+        {
             return Err(Error::MissingField {
                 field: "install.asset",
+            });
+        }
+        if raw.install.method == InstallMethod::Command && raw.install.command.is_empty() {
+            return Err(Error::MissingField {
+                field: "install.command",
             });
         }
         Ok(Manifest {
@@ -110,38 +111,27 @@ impl Manifest {
             install: Install {
                 method: raw.install.method,
                 assets: raw.install.asset,
+                components: raw.install.component,
                 base_dir: raw.install.base_dir,
                 env_box: raw.install.env_box.unwrap_or(EnvBox::Prepend),
+                args: raw.install.args,
+                strategy: raw.install.strategy,
+                commands: raw.install.command,
             },
             env: raw.env,
         })
     }
 }
 
-#[derive(Deserialize)]
-struct RawManifest {
-    meta: RawMeta,
-    install: RawInstall,
-    #[serde(default)]
-    env: BTreeMap<String, String>,
-}
-
-#[derive(Deserialize)]
-struct RawMeta {
-    name: Option<String>,
-    version: Option<String>,
-    #[serde(default)]
-    url: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct RawInstall {
-    method: InstallMethod,
-    #[serde(default)]
-    asset: BTreeMap<String, BTreeMap<String, String>>,
-    base_dir: String,
-    #[serde(default)]
-    env_box: Option<EnvBox>,
+impl Install {
+    /// Resolve the install method and silent args for a platform: a matching
+    /// `strategy` entry wins, otherwise the install-level defaults apply.
+    pub fn method_for(&self, target: &Target) -> (&InstallMethod, &[String]) {
+        let Some(entry) = self.strategy.get(&target.triplet()) else {
+            return (&self.method, &self.args);
+        };
+        (&entry.method, &entry.args)
+    }
 }
 
 #[cfg(test)]

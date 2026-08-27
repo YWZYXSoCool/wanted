@@ -72,18 +72,19 @@ pub fn execute(plan: &Plan, ctx: &Ctx) -> Result<()> {
 }
 
 fn run_phases(plan: &Plan, ctx: &Ctx, log: &mut UndoLog) -> Result<()> {
-    let parent = plan.dest_dir.parent().ok_or_else(|| {
-        crate::Error::Other(format!("dest has no parent: {}", plan.dest_dir.display()))
-    })?;
-    ctx.fs.create_dir_all(parent)?;
-
     for op in &plan.staged_ops {
         ctx.reporter.report(Progress::Phase(op_label(op)));
         log.push(op.apply(ctx)?);
     }
 
-    ctx.fs.rename(&plan.app_dir, &plan.dest_dir)?;
-    log.push(Compensation::RemoveDir(plan.dest_dir.clone()));
+    if plan.app_dir != plan.dest_dir {
+        let parent = plan.dest_dir.parent().ok_or_else(|| {
+            crate::Error::Other(format!("dest has no parent: {}", plan.dest_dir.display()))
+        })?;
+        ctx.fs.create_dir_all(parent)?;
+        ctx.fs.rename(&plan.app_dir, &plan.dest_dir)?;
+        log.push(Compensation::RemoveDir(plan.dest_dir.clone()));
+    }
 
     for op in &plan.commit_ops {
         ctx.reporter.report(Progress::Phase(op_label(op)));
@@ -98,6 +99,8 @@ fn op_label(op: &Op) -> &'static str {
     match op {
         Op::Download { .. } => "Downloading",
         Op::Unpack { .. } => "Extracting",
+        Op::RunInstaller { .. } => "Installing",
+        Op::RunCommand { .. } => "Installing",
         Op::WriteEnv { .. } => "Configuring env",
     }
 }

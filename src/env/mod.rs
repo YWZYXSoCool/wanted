@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use crate::Result;
 
 /// An environment variable delta operation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EnvOp {
     /// Set directly to the given value.
     Set,
@@ -76,6 +76,46 @@ pub fn apply_deltas(
         snapshots.push((delta.name.clone(), old));
     }
     Ok(snapshots)
+}
+
+/// Reverse an applied delta against the current value, so uninstall undoes exactly
+/// what one install added. Returns what the variable should become; `None` means it
+/// no longer exists and should be removed.
+///
+/// `Set` restores the pre-apply snapshot (`old`), because a `Set` owns the whole
+/// value. `Prepend`/`Append` drop only the applied segment from the *current*
+/// value, so segments added by later installs survive any uninstall order.
+pub fn reverse_value(
+    applied: &EnvDelta,
+    old: Option<&str>,
+    current: Option<&str>,
+    sep: &str,
+) -> Option<String> {
+    match applied.op {
+        EnvOp::Set => old.map(str::to_owned),
+        EnvOp::Prepend | EnvOp::Append => {
+            let current = current?;
+            let kept: Vec<&str> = current
+                .split(sep)
+                .map(str::trim)
+                .filter(|seg| !seg.is_empty() && *seg != applied.value)
+                .collect();
+            if kept.is_empty() {
+                None
+            } else {
+                Some(kept.join(sep))
+            }
+        }
+    }
+}
+
+/// Write the reverse of one applied delta to `store` (used by uninstall).
+pub fn undo_delta(applied: &EnvDelta, old: Option<&str>, store: &dyn EnvStore) -> Result<()> {
+    let current = store.read(&applied.name)?;
+    match reverse_value(applied, old, current.as_deref(), PATH_SEP) {
+        Some(next) => store.write(&applied.name, &next),
+        None => store.remove(&applied.name),
+    }
 }
 
 fn merge(current: Option<&str>, delta: &EnvDelta, sep: &str) -> String {

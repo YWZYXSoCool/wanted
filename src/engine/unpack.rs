@@ -31,10 +31,12 @@ pub fn extract(bytes: &[u8], dest: &Path, fs: &dyn Fs) -> Result<()> {
 }
 
 /// Parse the archive into a `(relative_path, content)` list; gzip is treated as
-/// tar.gz, anything else as a zip.
+/// tar.gz, xz as tar.xz, anything else as a zip.
 fn archive_entries(bytes: &[u8]) -> Result<Vec<(PathBuf, Vec<u8>)>> {
     if bytes.starts_with(&[0x1f, 0x8b]) {
         tar_gz_entries(bytes)
+    } else if bytes.starts_with(&[0xfd, b'7', b'z', b'X', b'Z', 0x00]) {
+        tar_xz_entries(bytes)
     } else if bytes.starts_with(b"PK\x03\x04") {
         zip_entries(bytes)
     } else {
@@ -62,6 +64,15 @@ fn zip_entries(bytes: &[u8]) -> Result<Vec<(PathBuf, Vec<u8>)>> {
 
 fn tar_gz_entries(bytes: &[u8]) -> Result<Vec<(PathBuf, Vec<u8>)>> {
     let decoder = flate2::read::GzDecoder::new(bytes);
+    tar_entries(decoder)
+}
+
+fn tar_xz_entries(bytes: &[u8]) -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    let decoder = xz2::read::XzDecoder::new(bytes);
+    tar_entries(decoder)
+}
+
+fn tar_entries<R: std::io::Read>(decoder: R) -> Result<Vec<(PathBuf, Vec<u8>)>> {
     let mut archive = tar::Archive::new(decoder);
     let mut out = Vec::new();
     for entry in archive

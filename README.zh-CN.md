@@ -39,6 +39,9 @@ wanted install go@go1.27.0
 # 安装时指定命名的资产来源（默认取插件的 `default` 来源）
 wanted install go --asset-source go.dev
 
+# 可选地在基础资产之上额外下载组件（若插件声明了组件）
+wanted install <tool> --with <component>
+
 # 列出已安装的工具
 wanted list
 
@@ -59,7 +62,7 @@ version = "1.0.0"          # 插件版本，不是工具版本
 url = "https://golang.org" # 主页
 
 [install]
-method = "download"        # download（解压归档）—— system 尚未接入
+method = "download"        # download / installer / command —— system 尚未接入
 base_dir = "golang"        # 应用所在的目录（位于 apps/ 之下）
 
 [install.asset]
@@ -81,14 +84,57 @@ GOBIN  = "$GOPATH/bin"
 
 **资产（asset）** 将平台三元组（`<arch>-<vendor>-<os>` 风格）映射到一个或多个命名来源。`{version}` 会被替换为你要求安装的版本；`--asset-source <name>` 选择来源（默认 `default`）。
 
+**组件（component）** 以与资产完全相同的「平台 → 来源 → URL」结构声明可选附加项。默认不会下载；传入可重复的 `--with <name>` 标志才抓取，并解压到基础资产目录之下（`apps/<base_dir>/<name>`），与核心隔离。环境变量条目可用 `../<name>/...` 形式的相对路径（相对 `apps/<base_dir>` 解析）指向组件目录。
+
 **环境变量（env）** 条目会展开 `{version}`、`{user}`（家目录）以及对先前定义过变量的 `$VAR` 引用。相对路径相对安装目录解析。`PATH` 默认前置追加，或通过 `install.env_box` 改为后置。
+
+**安装方式（method）**：`method = "download"`（默认）直接解压归档；`method = "installer"` 则下载可执行文件并作为**静默安装器**运行、装到 `apps/<base_dir>`，适用于以 `.exe` 发行的工具（如 Windows 上的 LLVM）。静默参数放在 `args` 中，可用 `{base}`（即 `apps/<base_dir>` 目录）、`{version}`、`{user}` 占位：
+
+```toml
+[install]
+method = "installer"
+base_dir = "llvm"
+asset = { "x86_64-pc-windows-msvc" = { default = "https://example/LLVM-{version}-win64.exe" } }
+args = ["/VERYSILENT", "/NORESTART", "/DIR={base}"]
+```
+
+有的工具在部分平台发行归档、在另一些平台发行安装器。用 `install.strategy` 按平台三元组指定各自的方式与参数；未列出的平台回退到 install 级的 `method`/`args`：
+
+```toml
+[install]
+method = "download"
+base_dir = "llvm"
+asset = {
+  "aarch64-apple-darwin" = { default = "...tar.xz" },
+  "x86_64-pc-windows-msvc" = { default = "...LLVM-{version}-win64.exe" },
+}
+
+[install.strategy]
+"x86_64-pc-windows-msvc" = { method = "installer", args = ["/VERYSILENT", "/DIR={base}"] }
+```
+
+有些工具不以归档或安装器分发，而是由包管理器拉取（`cargo install`、`npm i -g`、`pip install`…）。用 `method = "command"` 按**回退顺序**运行一条或多条外部命令：某个工具不在 `PATH`、或命令返回非零退出码时，就尝试下一条命令。每条命令写入 `apps/<base_dir>`（用 `--root {base}` / `--prefix {base}` 这类参数，或 `CARGO_INSTALL_ROOT` 这类环境变量引导到该目录）。`install.command` 与 `asset` 一样按平台三元组键控：
+
+```toml
+[install]
+method = "command"
+base_dir = "rust"
+
+[install.command]
+"x86_64-pc-windows-msvc" = [
+  { tool = "cargo", args = ["install", "--root", "{base}", "bat@1.0.0"], env = { CARGO_INSTALL_ROOT = "{base}" } },
+  { tool = "npm",   args = ["install", "--prefix", "{base}", "--global", "bat"] },
+]
+```
+
+`tool` 是可执行文件名（经 `PATH` 解析）。`args` 与每条命令的 `env` 映射的值会展开 `{base}`（即 `apps/<base_dir>` 目录）、`{version}`、`{user}` 占位。当所有命令都失败时，安装会汇总各错误并中止——**不会删除** `apps/<base_dir>` 中上一份安装。此方式不支持组件，也不需要 `asset`。
 
 ## CLI 参考
 
 | 命令                           | 别名 | 说明                                              |
 | ------------------------------ | ---- | ------------------------------------------------- |
 | `wanted add <plugin.toml>`     | `a`  | 注册插件清单，使工具可安装                          |
-| `wanted install <spec>...`     | `i`  | 安装工具（`name@version`），支持 `--source`、`--asset-source` |
+| `wanted install <spec>...`     | `i`  | 安装工具（`name@version`）；支持 `--source`、`--asset-source`、`--with <component>` |
 | `wanted update <tool\|plugin>` | `u`  | 更新已安装的工具或插件（*M0 占位*）                 |
 | `wanted remove <name>`         | `rm` | 移除已注册的插件清单                                |
 | `wanted uninstall <name>`      | `un` | 卸载工具并还原其环境变量                             |

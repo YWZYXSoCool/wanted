@@ -10,6 +10,7 @@ pub mod ops;
 pub mod plan;
 pub mod staging;
 pub mod unpack;
+pub mod url;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +22,7 @@ use crate::env::EnvStore;
 use crate::report::Reporter;
 
 pub use fs::{Fs, MemFs, RealFs};
+pub use url::Url;
 
 #[cfg(test)]
 mod tests;
@@ -29,26 +31,90 @@ mod tests;
 #[path = "dl_tests.rs"]
 mod dl_tests;
 
+#[cfg(test)]
+#[path = "installer_tests.rs"]
+mod installer_tests;
+
+#[cfg(test)]
+#[path = "command_tests.rs"]
+mod command_tests;
+
 /// Downloader abstraction: pulls a URL into bytes and reports progress while
 /// streaming. The real implementation hits the network; tests inject fakes.
 pub trait Downloader: Send {
     /// Fetch all bytes of `url`, reporting `(done, total)` per chunk read
     /// (`total` is `None` when unknown).
-    fn fetch(&self, url: &str, on_progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<Vec<u8>>;
+    fn fetch(&self, url: &Url, on_progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<Vec<u8>>;
+}
+
+/// Process-runner abstraction: runs a child process to completion. The real
+/// implementation spawns an OS process; tests inject fakes.
+pub trait ProcessRunner: Send {
+    /// Run `program` with `args`, waiting for it to finish.
+    fn run(&self, program: &std::path::Path, args: &[String]) -> Result<()>;
+
+    /// Run `program` with `args` and extra environment variables layered over the
+    /// inherited environment. Defaults to delegating to [`Self::run`] (ignoring
+    /// `env`), so test doubles only need to override `run`.
+    fn run_with_env(
+        &self,
+        program: &std::path::Path,
+        args: &[String],
+        _env: &[(String, String)],
+    ) -> Result<()> {
+        self.run(program, args)
+    }
+}
+
+/// The real process runner: a blocking child process with inherited stdio.
+pub struct RealProcess;
+
+impl ProcessRunner for RealProcess {
+    fn run(&self, program: &std::path::Path, args: &[String]) -> Result<()> {
+        self.run_with_env(program, args, &[])
+    }
+
+    fn run_with_env(
+        &self,
+        program: &std::path::Path,
+        args: &[String],
+        env: &[(String, String)],
+    ) -> Result<()> {
+        let status = std::process::Command::new(program)
+            .envs(env.iter().map(|(k, v)| (k, v)))
+            .args(args)
+            .status()
+            .map_err(|e| crate::Error::Process(e.to_string()))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(crate::Error::Process(format!("exited with {status}")))
+        }
+    }
 }
 
 /// Default read chunk size (64 KiB) so progress callbacks are not too frequent.
 const READ_CHUNK: usize = 64 * 1024;
 
-/// Concurrent connections for parallel segmented downloads.
-const PARALLEL_WORKERS: usize = 4;
+/// Default number of concurrent segment workers for a parallel download.
+pub const DEFAULT_PARALLEL_WORKERS: usize = 4;
 
 /// Files smaller than this are not segmented and fetched as a single stream.
 const PARALLEL_MIN_BYTES: u64 = 8 << 20;
 
+/// Process-wide cancellation flag, set by the signal handler on Ctrl+C so
+/// in-flight downloads abort and the normal rollback path runs instead of the
+/// OS killing the process mid-install.
+static CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// Accessor for the process-wide cancellation flag.
+pub fn cancel_flag() -> &'static AtomicBool {
+    &CANCELLED
+}
+
 /// A byte range of a file, owned so it can move into a scoped thread.
 struct Segment {
-    url: String,
+    url: Url,
     start: u64,
     end: u64,
 }
@@ -58,7 +124,7 @@ impl Segment {
     fn run(&self, out: &mut [u8], tx: &mpsc::Sender<u64>, cancel: &AtomicBool) -> Result<()> {
         use std::io::Read;
         let range = format!("bytes={}-{}", self.start, self.end);
-        let response = ureq::get(&self.url)
+        let response = ureq::get(self.url.as_str())
             .set("Range", &range)
             .call()
             .map_err(|e| crate::Error::Network(e.to_string()))?;
@@ -66,8 +132,8 @@ impl Segment {
         let mut buffer = [0u8; READ_CHUNK];
         let mut filled = 0usize;
         while filled < out.len() {
-            if cancel.load(Ordering::SeqCst) {
-                return Err(crate::Error::Network("download cancelled".into()));
+            if cancel.load(Ordering::SeqCst) || cancel_flag().load(Ordering::SeqCst) {
+                return Err(crate::Error::Cancelled);
             }
             let read = reader
                 .read(&mut buffer)
@@ -92,13 +158,31 @@ impl Segment {
 
 /// A `ureq`-based real downloader: fetches large files with segmented parallel
 /// HTTP `Range` requests and falls back to a single stream when unsupported.
-pub struct RealDownloader;
+/// The number of concurrent segment workers is configurable.
+pub struct RealDownloader {
+    workers: usize,
+}
+
+impl Default for RealDownloader {
+    fn default() -> Self {
+        Self::with_workers(DEFAULT_PARALLEL_WORKERS)
+    }
+}
+
+impl RealDownloader {
+    /// A downloader splitting large files across `workers` parallel segments.
+    pub fn with_workers(workers: usize) -> Self {
+        RealDownloader {
+            workers: workers.max(1),
+        }
+    }
+}
 
 impl Downloader for RealDownloader {
-    fn fetch(&self, url: &str, on_progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<Vec<u8>> {
+    fn fetch(&self, url: &Url, on_progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<Vec<u8>> {
         match Self::probe_total(url)? {
             Some(total) if total >= PARALLEL_MIN_BYTES => {
-                Self::parallel_stream(url, total, on_progress)
+                Self::parallel_stream(url, total, self.workers, on_progress)
             }
             _ => Self::single_stream(url, on_progress),
         }
@@ -108,8 +192,8 @@ impl Downloader for RealDownloader {
 impl RealDownloader {
     /// Issue a `Range` probe: returns the total byte count when the server
     /// answers `206` (segmentation supported), otherwise `None`.
-    fn probe_total(url: &str) -> Result<Option<u64>> {
-        let response = ureq::get(url)
+    fn probe_total(url: &Url) -> Result<Option<u64>> {
+        let response = ureq::get(url.as_str())
             .set("Range", "bytes=0-0")
             .call()
             .map_err(|e| crate::Error::Network(e.to_string()))?;
@@ -122,9 +206,9 @@ impl RealDownloader {
 
     /// Single-connection streaming download (fallback when the server rejects
     /// `Range` or the file is small).
-    fn single_stream(url: &str, on_progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<Vec<u8>> {
+    fn single_stream(url: &Url, on_progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<Vec<u8>> {
         use std::io::Read;
-        let response = ureq::get(url)
+        let response = ureq::get(url.as_str())
             .call()
             .map_err(|e| crate::Error::Network(e.to_string()))?;
         let total = response
@@ -135,6 +219,9 @@ impl RealDownloader {
         let mut buffer = [0u8; READ_CHUNK];
         let mut done = 0u64;
         loop {
+            if cancel_flag().load(Ordering::SeqCst) {
+                return Err(crate::Error::Cancelled);
+            }
             let read = reader
                 .read(&mut buffer)
                 .map_err(|e| crate::Error::Network(e.to_string()))?;
@@ -163,15 +250,16 @@ impl RealDownloader {
     /// Download segments in parallel: each thread fetches a disjoint byte range
     /// into its slice; the calling thread aggregates received bytes as progress.
     fn parallel_stream(
-        url: &str,
+        url: &Url,
         total: u64,
+        workers: usize,
         on_progress: &mut dyn FnMut(u64, Option<u64>),
     ) -> Result<Vec<u8>> {
         use std::time::Duration;
 
         let cancel = Arc::new(AtomicBool::new(false));
         let error = Arc::new(Mutex::new(None::<crate::Error>));
-        let ranges = Self::segment_ranges(total, PARALLEL_WORKERS);
+        let ranges = Self::segment_ranges(total, workers);
         let mut buf = vec![0u8; total as usize];
 
         thread::scope(|scope| {
@@ -181,7 +269,7 @@ impl RealDownloader {
             let mut handles = Vec::new();
             for ((start, end), slice) in ranges.iter().zip(slices) {
                 let segment = Segment {
-                    url: url.to_string(),
+                    url: url.clone(),
                     start: *start,
                     end: *end,
                 };
@@ -268,6 +356,8 @@ pub struct Ctx<'a> {
     pub fs: &'a dyn Fs,
     /// Download backend.
     pub downloader: &'a dyn Downloader,
+    /// Process-backend (runs silent installers).
+    pub runner: &'a dyn ProcessRunner,
     /// Environment variable persistence backend.
     pub env: &'a dyn EnvStore,
     /// Progress reporting backend.

@@ -1,6 +1,8 @@
 //! Environment layer tests: delta merging and compensation replay.
 
-use super::{EnvDelta, EnvOp, EnvStore, MemEnvStore, PATH_SEP, apply_deltas};
+use super::{
+    EnvDelta, EnvOp, EnvStore, MemEnvStore, PATH_SEP, apply_deltas, reverse_value, undo_delta,
+};
 
 #[test]
 fn prepend_inserts_at_front_with_dedup() {
@@ -56,4 +58,60 @@ fn set_overwrites_and_remove_clears_missing() {
     };
     apply_deltas(&[delta], &store).unwrap();
     assert_eq!(store.read("GOROOT").unwrap().unwrap(), "/home/u/go");
+}
+
+#[test]
+fn reverse_prepend_removes_only_applied_segment() {
+    let applied = EnvDelta {
+        name: "PATH".into(),
+        value: "/apps/golang/bin".into(),
+        op: EnvOp::Prepend,
+    };
+    let current = format!("/apps/golang/bin;{PATH_SEP}/apps/gcc/bin;/usr/bin");
+    let next = reverse_value(&applied, Some("/usr/bin"), Some(&current), PATH_SEP).unwrap();
+    assert_eq!(next, "/apps/gcc/bin;/usr/bin");
+}
+
+#[test]
+fn reverse_prepend_empty_leaves_none() {
+    let applied = EnvDelta {
+        name: "PATH".into(),
+        value: "/apps/golang/bin".into(),
+        op: EnvOp::Prepend,
+    };
+    // The applied segment is the only entry with nothing before it.
+    assert_eq!(
+        reverse_value(&applied, None, Some("/apps/golang/bin"), PATH_SEP),
+        None
+    );
+    // Nothing current to remove from -> nothing to do.
+    assert_eq!(reverse_value(&applied, None, None, PATH_SEP), None);
+}
+
+#[test]
+fn undo_delta_set_restores_snapshot() {
+    let store = MemEnvStore::new();
+    store.write("GOROOT", "/home/u/go").unwrap();
+    let delta = EnvDelta {
+        name: "GOROOT".into(),
+        value: "/home/u/go".into(),
+        op: EnvOp::Set,
+    };
+    apply_deltas(&[delta.clone()], &store).unwrap();
+    undo_delta(&delta, Some("/usr/local/go"), &store).unwrap();
+    assert_eq!(store.read("GOROOT").unwrap().unwrap(), "/usr/local/go");
+}
+
+#[test]
+fn undo_delta_set_without_old_removes_var() {
+    let store = MemEnvStore::new();
+    store.remove("GOROOT").unwrap();
+    let delta = EnvDelta {
+        name: "GOROOT".into(),
+        value: "/home/u/go".into(),
+        op: EnvOp::Set,
+    };
+    apply_deltas(&[delta.clone()], &store).unwrap();
+    undo_delta(&delta, None, &store).unwrap();
+    assert_eq!(store.read("GOROOT").unwrap(), None);
 }

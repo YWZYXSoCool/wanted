@@ -54,6 +54,9 @@ wanted install go@go1.27.0
 # pick a named asset source at install time (defaults to the plugin's `default` source)
 wanted install go --asset-source go.dev
 
+# optionally download components on top of the base asset (if the plugin declares them)
+wanted install <tool> --with <component>
+
 # list what's installed
 wanted list
 
@@ -75,7 +78,7 @@ version = "1.0.0"          # plugin version, not the tool version
 url = "https://golang.org" # homepage
 
 [install]
-method = "download"        # download (extract archive) — system is not wired yet
+method = "download"        # download / installer / command — system is not wired yet
 base_dir = "golang"        # directory inside/at which the app lives
 
 [install.asset]
@@ -99,17 +102,80 @@ GOBIN  = "$GOPATH/bin"
 named sources. `{version}` is substituted with the version you ask to install;
 the `--asset-source <name>` flag selects the source (default: `default`).
 
+**Components** declare optional add-ons with the exact same platform → source →
+URL shape as assets. They are never downloaded by default; pass the repeatable
+`--with <name>` flag to fetch one and unpack it under the base asset's directory
+(`apps/<base_dir>/<name>`), separate from the core. Env entries address them with
+`../<name>/...`-style relative paths (resolved from `apps/<base_dir>`).
+
 **Env** entries expand `{version}`, `{user}` (home directory) and `$VAR`
 references to variables defined earlier in the list. Relative paths resolve
 against the install directory. `PATH` is prepended by default, or appended via
 `install.env_box`.
+
+**Install method.** `method = "download"` (default) unpacks a vendored archive.
+`method = "installer"` instead downloads an executable and runs it as a silent
+installer into `apps/<base_dir>`, for tools shipped as `.exe` (e.g. LLVM on
+Windows). The silent flags live in `args` and may reference `{base}` (the
+`apps/<base_dir>` directory), `{version}` and `{user}`:
+
+```toml
+[install]
+method = "installer"
+base_dir = "llvm"
+asset = { "x86_64-pc-windows-msvc" = { default = "https://example/LLVM-{version}-win64.exe" } }
+args = ["/VERYSILENT", "/NORESTART", "/DIR={base}"]
+```
+
+Some tools ship archives on some platforms but an installer on others. Use
+`install.strategy` to pick the method (and args) per platform; anything not
+listed falls back to the install-level `method`/`args`:
+
+```toml
+[install]
+method = "download"
+base_dir = "llvm"
+asset = {
+  "aarch64-apple-darwin" = { default = "...tar.xz" },
+  "x86_64-pc-windows-msvc" = { default = "...LLVM-{version}-win64.exe" },
+}
+
+[install.strategy]
+"x86_64-pc-windows-msvc" = { method = "installer", args = ["/VERYSILENT", "/DIR={base}"] }
+```
+
+Some tools aren't distributed as archives or installers at all — they are pulled
+in by a package manager (`cargo install`, `npm i -g`, `pip install`, …). Use
+`method = "command"` to run one or more external commands in **fallback order**:
+if a tool is missing from `PATH`, or a command exits non-zero, the next command is
+tried. Each command writes into `apps/<base_dir>` (point it there via a flag like
+`--root {base}` / `--prefix {base}`, or an env var like `CARGO_INSTALL_ROOT`).
+`install.command` is keyed by platform triple, mirroring `asset`:
+
+```toml
+[install]
+method = "command"
+base_dir = "rust"
+
+[install.command]
+"x86_64-pc-windows-msvc" = [
+  { tool = "cargo", args = ["install", "--root", "{base}", "bat@1.0.0"], env = { CARGO_INSTALL_ROOT = "{base}" } },
+  { tool = "npm",   args = ["install", "--prefix", "{base}", "--global", "bat"] },
+]
+```
+
+`tool` is the executable name (resolved via `PATH`). `args` and the values of the
+per-command `env` map expand `{base}` (the `apps/<base_dir>` directory),
+`{version}` and `{user}`. When every command fails, the install reports the
+combined errors and aborts — a previous good install in `apps/<base_dir>` is
+never deleted. This method supports no components and needs no `asset`.
 
 ## CLI reference
 
 | Command                        | Alias | Description                                            |
 | ------------------------------ | ----- | ------------------------------------------------------ |
 | `wanted add <plugin.toml>`     | `a`   | Register a plugin manifest, making a tool installable  |
-| `wanted install <spec>...`     | `i`   | Install tools (`name@version`), `--source`, `--asset-source` |
+| `wanted install <spec>...`     | `i`   | Install tools (`name@version`); `--source`, `--asset-source`, `--with <component>` |
 | `wanted update <tool\|plugin>` | `u`   | Update an installed tool or plugin (*M0 stub*)         |
 | `wanted remove <name>`         | `rm`  | Remove a registered plugin manifest                    |
 | `wanted uninstall <name>`      | `un`  | Uninstall a tool and restore its environment           |

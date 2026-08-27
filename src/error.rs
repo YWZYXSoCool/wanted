@@ -32,6 +32,10 @@ pub enum Error {
     #[error("archive: {0}")]
     Archive(String),
 
+    /// Child process (e.g. a silent installer) failure.
+    #[error("process: {0}")]
+    Process(String),
+
     /// The current platform has no matching asset.
     #[error("unsupported platform: {target}")]
     UnsupportedPlatform { target: String },
@@ -40,9 +44,18 @@ pub enum Error {
     #[error("no asset source {name} for platform {target}")]
     SourceNotFound { target: String, name: String },
 
+    /// The manifest declares no component with this name.
+    #[error("plugin has no component '{name}'")]
+    UnknownComponent { name: String },
+
     /// A capability that is not yet supported.
     #[error("unsupported on this platform yet: {0}")]
     Unsupported(&'static str),
+
+    /// The install was cancelled (Ctrl+C); treated as a normal error so the
+    /// run rolls back instead of the OS killing the process.
+    #[error("cancelled")]
+    Cancelled,
 
     /// A compensation step failed during a rollback.
     #[error("rollback failed: {0}")]

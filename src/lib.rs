@@ -16,10 +16,12 @@ pub mod receipt;
 pub mod report;
 pub mod store;
 pub mod uninstall;
+pub mod version;
 
 pub use error::Error;
 pub use receipt::{Receipt, VarSnapshot};
 pub use report::{Progress, ProgressState, Reporter, SilentReporter};
+pub use version::Version;
 
 /// The crate-wide result type.
 pub type Result<T> = std::result::Result<T, crate::error::Error>;

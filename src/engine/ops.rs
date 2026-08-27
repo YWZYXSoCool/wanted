@@ -4,23 +4,41 @@
 //! pair. Compensations are composable first-class values; rollback replays them
 //! in reverse LIFO order.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::Result;
+use crate::Version;
 use crate::engine::fs::Fs;
-use crate::engine::{Ctx, unpack};
+use crate::engine::{Ctx, Url, unpack};
 use crate::env::{self, EnvDelta};
+use crate::plugin::raw::RawCommand;
 use crate::report::Progress;
 
 /// One executable operation (lazy data, not an action).
 #[derive(Clone, Debug)]
 pub enum Op {
     /// Download the URL to `to`.
-    Download { url: String, to: PathBuf },
+    Download { url: Url, to: PathBuf },
     /// Extract the archive at `from` to `to`.
     Unpack { from: PathBuf, to: PathBuf },
+    /// Run the executable at `exe` as a silent installer writing into `base`.
+    RunInstaller {
+        /// The downloaded installer executable.
+        exe: PathBuf,
+        /// Silent-install arguments (placeholders already expanded).
+        args: Vec<String>,
+        /// The target install directory under `apps`.
+        base: PathBuf,
+    },
     /// Apply the deltas to the environment backend.
     WriteEnv { deltas: Vec<EnvDelta> },
+    /// Run external install commands in fallback order, writing into `base`.
+    RunCommand {
+        /// Fully-expanded command lines, tried in order until one succeeds.
+        commands: Vec<CommandInvocation>,
+        /// The target install directory under `apps` this run promises to fill.
+        base: PathBuf,
+    },
 }
 
 impl Op {
@@ -39,6 +57,11 @@ impl Op {
                 unpack::extract(&bytes, to, ctx.fs)?;
                 Ok(Compensation::RemoveDir(to.clone()))
             }
+            Op::RunInstaller { exe, args, base } => {
+                ctx.fs.create_dir_all(base)?;
+                ctx.runner.run(exe, args)?;
+                Ok(Compensation::RemoveDir(base.clone()))
+            }
             Op::WriteEnv { deltas } => {
                 let snapshots = env::apply_deltas(deltas, ctx.env)?;
                 let restores: Vec<Compensation> = snapshots
@@ -47,7 +70,71 @@ impl Op {
                     .collect();
                 Ok(Compensation::Composite(restores))
             }
+            Op::RunCommand { commands, base } => {
+                ctx.fs.create_dir_all(base)?;
+                CommandInvocation::try_fallback(commands, ctx)
+                    .map(|()| Compensation::RemoveDir(base.clone()))
+            }
         }
+    }
+}
+
+/// One fully-expanded external command line (plan-time data, not an action).
+#[derive(Clone, Debug)]
+pub struct CommandInvocation {
+    /// The program to invoke, resolved via PATH.
+    pub tool: String,
+    /// Arguments, placeholders already expanded.
+    pub args: Vec<String>,
+    /// Extra environment variables, layered over the inherited environment.
+    pub env: Vec<(String, String)>,
+}
+
+impl CommandInvocation {
+    /// Build a fully-expanded invocation from a raw command, substituting
+    /// `{base}` (the install dir under `apps`), `{version}`, and `{user}`.
+    pub fn from_raw(raw: &RawCommand, base: &Path, version: &Version) -> CommandInvocation {
+        let base_str = base.to_string_lossy();
+        let user_home = crate::env::user_home();
+        let expand = |template: &str| {
+            template
+                .replace("{base}", &base_str)
+                .replace("{version}", &version.to_string())
+                .replace("{user}", &user_home)
+        };
+        CommandInvocation {
+            tool: raw.tool.clone(),
+            args: raw.args.iter().map(|arg| expand(arg)).collect(),
+            env: raw
+                .env
+                .iter()
+                .map(|(name, value)| (name.clone(), expand(value)))
+                .collect(),
+        }
+    }
+
+    /// Run this invocation on the context's process runner.
+    pub fn run(&self, ctx: &Ctx) -> Result<()> {
+        ctx.runner
+            .run_with_env(Path::new(&self.tool), &self.args, &self.env)
+    }
+
+    /// Run `commands` in order until one succeeds. A missing tool and a failing
+    /// command are indistinguishable here (both surface as an `Err`), and both
+    /// fall back to the next candidate; when every command fails the errors are
+    /// aggregated into a single [`crate::Error::Process`].
+    pub fn try_fallback(commands: &[CommandInvocation], ctx: &Ctx) -> Result<()> {
+        let mut failures = Vec::new();
+        for invocation in commands {
+            match invocation.run(ctx) {
+                Ok(()) => return Ok(()),
+                Err(error) => failures.push(format!("{}: {error}", invocation.tool)),
+            }
+        }
+        Err(crate::Error::Process(format!(
+            "all install commands failed: {}",
+            failures.join("; ")
+        )))
     }
 }
 

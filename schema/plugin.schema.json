@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RawManifest",
+  "description": "A plugin manifest exactly as it appears in a TOML file.",
+  "type": "object",
+  "properties": {
+    "env": {
+      "description": "Environment variables to configure (name -> template).",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "install": {
+      "description": "Install section.",
+      "$ref": "#/$defs/RawInstall"
+    },
+    "meta": {
+      "description": "Metadata.",
+      "$ref": "#/$defs/RawMeta"
+    }
+  },
+  "required": [
+    "meta",
+    "install"
+  ],
+  "$defs": {
+    "EnvBox": {
+      "description": "The PATH box (prepend or append).",
+      "oneOf": [
+        {
+          "description": "Prepend.",
+          "type": "string",
+          "const": "prepend"
+        },
+        {
+          "description": "Append.",
+          "type": "string",
+          "const": "append"
+        }
+      ]
+    },
+    "InstallMethod": {
+      "description": "Install method.",
+      "oneOf": [
+        {
+          "description": "Extract the vendor-distributed archive directly.",
+          "type": "string",
+          "const": "download"
+        },
+        {
+          "description": "Run the downloaded asset as a silent installer, targeting `apps/<base_dir>`.",
+          "type": "string",
+          "const": "installer"
+        },
+        {
+          "description": "Delegate to a system package manager (`winget` / `brew`); not wired in M0.",
+          "type": "string",
+          "const": "system"
+        },
+        {
+          "description": "Run external package-manager commands (e.g. `cargo install`, `npm i -g`)\nin order, falling back to the next on a missing tool or non-zero exit.",
+          "type": "string",
+          "const": "command"
+        }
+      ]
+    },
+    "RawCommand": {
+      "description": "One external install command, tried in order until one succeeds.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Argument templates; `{base}` / `{version}` / `{user}` are expanded.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "description": "Extra environment variables (name -> template), layered over the\ninherited environment of the child process.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "tool": {
+          "description": "The program to invoke, resolved via PATH (e.g. \"cargo\", \"npm\").",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool"
+      ]
+    },
+    "RawInstall": {
+      "description": "Install section.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Default silent-install arguments (with `{base}`), used by the `installer` method.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "asset": {
+          "description": "Asset map: platform triplet -> source name -> URL template (with `{version}`).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "default": {}
+        },
+        "base_dir": {
+          "description": "Placement path relative to `apps`.",
+          "type": "string"
+        },
+        "command": {
+          "description": "External install commands for the `command` method, keyed by platform\ntriplet; the ordered list is tried in fallback order until one succeeds.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/RawCommand"
+            }
+          }
+        },
+        "component": {
+          "description": "Optional components (platform-keyed like `asset`), downloaded only when enabled.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "default": {}
+        },
+        "env_box": {
+          "description": "The PATH box.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvBox"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "method": {
+          "description": "Install method.",
+          "$ref": "#/$defs/InstallMethod"
+        },
+        "strategy": {
+          "description": "Per-platform override of method and silent arguments.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/RawStrategy"
+          }
+        }
+      },
+      "required": [
+        "method",
+        "base_dir"
+      ]
+    },
+    "RawMeta": {
+      "description": "Manifest metadata.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Tool name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "Source / update origin.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "version": {
+          "description": "Manifest's own version (SemVer).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "RawStrategy": {
+      "description": "A per-platform override of the install method and its silent arguments.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Silent-install arguments, with `{base}` = install dir under `apps`.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "method": {
+          "description": "Install method for this platform.",
+          "$ref": "#/$defs/InstallMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    }
+  }
+}

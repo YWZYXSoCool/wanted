@@ -3,25 +3,28 @@
 use std::fmt;
 use std::str::FromStr;
 
+use crate::Version;
+
 /// A tool spec from the command line, e.g. `go@1.22.5`.
 ///
 /// A bare `name` with no version defaults to `latest`.
 ///
 /// ```rust
 /// use std::str::FromStr;
+/// use wanted::Version;
 /// use wanted::cli::spec::ToolSpec;
 ///
 /// let pinned = ToolSpec::from_str("go@1.22.5").unwrap();
 /// assert_eq!(pinned.name(), "go");
-/// assert_eq!(pinned.version(), "1.22.5");
+/// assert_eq!(pinned.version(), &Version::parse("1.22.5").unwrap());
 ///
 /// let latest = ToolSpec::from_str("go").unwrap();
-/// assert_eq!(latest.version(), "latest");
+/// assert_eq!(latest.version(), &Version::Latest);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ToolSpec {
     name: String,
-    version: String,
+    version: Version,
 }
 
 impl ToolSpec {
@@ -31,7 +34,7 @@ impl ToolSpec {
     }
 
     /// The requested version, or `latest` when not pinned.
-    pub fn version(&self) -> &str {
+    pub fn version(&self) -> &Version {
         &self.version
     }
 }
@@ -47,7 +50,7 @@ impl FromStr for ToolSpec {
         match spec.split_once('@') {
             None => Ok(ToolSpec {
                 name: spec.to_string(),
-                version: "latest".to_string(),
+                version: Version::Latest,
             }),
             Some((name, version)) => Self::pinned(name, version, spec),
         }
@@ -65,12 +68,16 @@ impl ToolSpec {
         if name.is_empty() {
             return Err(ToolSpecError::MissingName { raw: raw.into() });
         }
-        if version.is_empty() || version.contains('@') {
-            return Err(ToolSpecError::InvalidVersion { raw: raw.into() });
-        }
+        let version =
+            version
+                .parse::<Version>()
+                .map_err(|detail| ToolSpecError::InvalidVersion {
+                    raw: raw.into(),
+                    detail: detail.to_string(),
+                })?;
         Ok(ToolSpec {
             name: name.to_string(),
-            version: version.to_string(),
+            version,
         })
     }
 }
@@ -84,9 +91,9 @@ pub enum ToolSpecError {
     /// The spec has nothing before `@`.
     #[error("missing tool name before '@' in {raw:?}")]
     MissingName { raw: String },
-    /// The version after `@` is empty or contains another `@`.
-    #[error("tool spec {raw:?} must pin a single version after '@'")]
-    InvalidVersion { raw: String },
+    /// The version after `@` is not a valid SemVer.
+    #[error("tool spec {raw:?} has an invalid version: {detail}")]
+    InvalidVersion { raw: String, detail: String },
 }
 
 #[cfg(test)]

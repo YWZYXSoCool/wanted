@@ -1,27 +1,28 @@
 //! Tests for tool spec parsing.
 
 use super::{ToolSpec, ToolSpecError};
+use crate::Version;
 use std::str::FromStr;
 
 #[test]
 fn test_pinned_name_and_version() {
     let spec = ToolSpec::from_str("go@1.22.5").unwrap();
     assert_eq!(spec.name(), "go");
-    assert_eq!(spec.version(), "1.22.5");
+    assert_eq!(spec.version(), &Version::parse("1.22.5").unwrap());
 }
 
 #[test]
 fn test_bare_name_defaults_to_latest() {
     let spec = ToolSpec::from_str("go").unwrap();
     assert_eq!(spec.name(), "go");
-    assert_eq!(spec.version(), "latest");
+    assert_eq!(spec.version(), &Version::Latest);
 }
 
 #[test]
 fn test_whitespace_is_trimmed() {
-    let spec = ToolSpec::from_str("  go@1.2  ").unwrap();
+    let spec = ToolSpec::from_str("  go@1.2.0  ").unwrap();
     assert_eq!(spec.name(), "go");
-    assert_eq!(spec.version(), "1.2");
+    assert_eq!(spec.version(), &Version::parse("1.2.0").unwrap());
 }
 
 #[test]
@@ -31,30 +32,36 @@ fn test_empty_spec_is_rejected() {
 
 #[test]
 fn test_multi_version_spec_is_rejected() {
-    assert_eq!(
+    assert!(matches!(
         ToolSpec::from_str("go@1@2"),
-        Err(ToolSpecError::InvalidVersion {
-            raw: "go@1@2".into()
-        })
-    );
+        Err(ToolSpecError::InvalidVersion { .. })
+    ));
+}
+
+#[test]
+fn test_non_semver_version_is_rejected() {
+    assert!(matches!(
+        ToolSpec::from_str("go@banana"),
+        Err(ToolSpecError::InvalidVersion { .. })
+    ));
 }
 
 #[test]
 fn test_missing_name_is_rejected() {
     assert_eq!(
-        ToolSpec::from_str("@1.22"),
+        ToolSpec::from_str("@1.22.0"),
         Err(ToolSpecError::MissingName {
-            raw: "@1.22".into()
+            raw: "@1.22.0".into()
         })
     );
 }
 
 #[test]
 fn test_missing_version_is_rejected() {
-    assert_eq!(
+    assert!(matches!(
         ToolSpec::from_str("go@"),
-        Err(ToolSpecError::InvalidVersion { raw: "go@".into() })
-    );
+        Err(ToolSpecError::InvalidVersion { .. })
+    ));
 }
 
 #[test]

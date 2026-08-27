@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
-use crate::engine::{Downloader, RealDownloader};
+use crate::engine::{Downloader, RealDownloader, Url};
 
 #[test]
 fn segment_ranges_covers_whole_file_in_worker_ranges() {
@@ -40,14 +40,14 @@ fn content_range_total_parses_tail_segment() {
 /// A minimal HTTP server: answers `Range` requests with a 206 slice, otherwise a
 /// 200 full body, for downloader tests.
 struct RangeServer {
-    url: String,
+    url: Url,
 }
 
 impl RangeServer {
     fn serve(body: Vec<u8>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap();
-        let url = format!("http://{port}/go1.27.zip");
+        let url = Url::from(format!("http://{port}/go1.27.zip"));
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 match stream {
@@ -112,7 +112,7 @@ fn real_downloader_parallel_reassembles_body() {
     let body: Vec<u8> = (0..body_len).map(|i| (i % 251) as u8).collect();
     let server = RangeServer::serve(body.clone());
     let mut last = (0u64, None);
-    let bytes = RealDownloader
+    let bytes = RealDownloader::default()
         .fetch(&server.url, &mut |done, total| last = (done, total))
         .unwrap();
     assert_eq!(bytes, body);

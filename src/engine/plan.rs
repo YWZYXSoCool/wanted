@@ -4,13 +4,26 @@
 //! I/O, so it is unit-testable, `--dry-run`-able, and auditable. Side effects
 //! are deferred to the execution layer.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::Result;
-use crate::engine::ops::Op;
+use crate::Version;
+use crate::engine::ops::{CommandInvocation, Op};
 use crate::engine::staging::Staging;
+use crate::engine::url::Url;
 use crate::env::EnvDelta;
-use crate::plugin::{DEFAULT_SOURCE, InstallMethod, Manifest, Target};
+use crate::plugin::{AssetMap, DEFAULT_SOURCE, InstallMethod, Manifest, Target};
+
+/// Install-time choices supplied by the user: the asset source and any optional
+/// components to download on top of the base asset.
+#[derive(Clone, Debug, Default)]
+pub struct Selection<'a> {
+    /// Named asset source; `None` picks the plugin's `default` source.
+    pub source: Option<&'a str>,
+    /// Names of optional components to download, in declaration-independent order.
+    pub components: &'a [String],
+}
 
 /// A complete install plan (two phases: staged ops + commit ops).
 #[derive(Clone, Debug)]
@@ -18,7 +31,7 @@ pub struct Plan {
     /// Tool name.
     pub name: String,
     /// Version to install.
-    pub version: String,
+    pub version: Version,
     /// Staging directory.
     pub staging_dir: PathBuf,
     /// File the archive is downloaded to.
@@ -54,63 +67,231 @@ impl Manifest {
         &self,
         root: &Path,
         target: &Target,
-        version: &str,
-        source: Option<&str>,
+        version: &Version,
+        selection: &Selection,
     ) -> Result<Plan> {
-        let url = self.install_url(target, version, source)?;
+        let (method, args) = self.install.method_for(target);
+        match method {
+            InstallMethod::Installer => self.plan_installer(root, target, version, selection, args),
+            InstallMethod::System => Err(crate::Error::Unsupported(
+                "install method 'system' not yet wired",
+            )),
+            InstallMethod::Download => self.plan_download(root, target, version, selection),
+            InstallMethod::Command => self.plan_command(root, target, version, selection),
+        }
+    }
+
+    /// Plan a download-and-extract install (unpack a vendored archive).
+    fn plan_download(
+        &self,
+        root: &Path,
+        target: &Target,
+        version: &Version,
+        selection: &Selection,
+    ) -> Result<Plan> {
+        let url = self.install_url(target, version, selection.source)?;
         let base_dir = PathBuf::from(&self.install.base_dir);
         let staging = Staging::new(&root.join(".wanted"), &self.meta.name);
         let staging_dir = staging.dir().to_path_buf();
-        let download_to = staging_dir.join("downloads").join(archive_name(&url));
+        let download_to = staging_dir.join("downloads").join(url.file_name());
         let app_dir = staging_dir.join("app");
         let dest_dir = root.join(".wanted").join("apps").join(&base_dir);
         let deltas = self.env_deltas(dest_dir.parent().unwrap_or(Path::new("")), version)?;
 
+        let mut staged_ops = vec![
+            Op::Download {
+                url,
+                to: download_to.clone(),
+            },
+            Op::Unpack {
+                from: download_to.clone(),
+                to: app_dir.clone(),
+            },
+        ];
+        let mut seen = BTreeSet::new();
+        for component in selection.components {
+            if !seen.insert(component) {
+                continue;
+            }
+            self.component_ops(
+                component,
+                target,
+                version,
+                selection.source,
+                &staging_dir,
+                &mut staged_ops,
+            )?;
+        }
+
         Ok(Plan {
             name: self.meta.name.clone(),
-            version: version.to_string(),
+            version: version.clone(),
             staging_dir,
-            app_dir: app_dir.clone(),
+            app_dir,
             dest_dir,
-            staged_ops: vec![
-                Op::Download {
-                    url,
-                    to: download_to.clone(),
-                },
-                Op::Unpack {
-                    from: download_to.clone(),
-                    to: app_dir,
-                },
-            ],
+            staged_ops,
             download_to,
             commit_ops: vec![Op::WriteEnv { deltas }],
         })
     }
 
-    /// Pick the asset URL for the current platform and source, substituting `{version}`.
-    fn install_url(&self, target: &Target, version: &str, source: Option<&str>) -> Result<String> {
-        if self.install.method != InstallMethod::Download {
+    /// Plan a silent-installer install: download it, then run it into `dest_dir`.
+    fn plan_installer(
+        &self,
+        root: &Path,
+        target: &Target,
+        version: &Version,
+        selection: &Selection,
+        args: &[String],
+    ) -> Result<Plan> {
+        if !selection.components.is_empty() {
             return Err(crate::Error::Unsupported(
-                "install method 'system' not yet wired",
+                "components are only supported for the 'download' method",
             ));
         }
-        let sources = self.install.assets.get(&target.triplet()).ok_or_else(|| {
-            crate::Error::UnsupportedPlatform {
+        let url = self.install_url(target, version, selection.source)?;
+        let base_dir = PathBuf::from(&self.install.base_dir);
+        let staging = Staging::new(&root.join(".wanted"), &self.meta.name);
+        let staging_dir = staging.dir().to_path_buf();
+        let download_to = staging_dir.join("downloads").join(url.file_name());
+        let dest_dir = root.join(".wanted").join("apps").join(&base_dir);
+        let expanded = expand_installer_args(args, &dest_dir, version);
+        let deltas = self.env_deltas(dest_dir.parent().unwrap_or(Path::new("")), version)?;
+
+        let staged_ops = vec![
+            Op::Download {
+                url,
+                to: download_to.clone(),
+            },
+            Op::RunInstaller {
+                exe: download_to.clone(),
+                args: expanded,
+                base: dest_dir.clone(),
+            },
+        ];
+        Ok(Plan {
+            name: self.meta.name.clone(),
+            version: version.clone(),
+            staging_dir,
+            app_dir: dest_dir.clone(),
+            dest_dir,
+            staged_ops,
+            download_to,
+            commit_ops: vec![Op::WriteEnv { deltas }],
+        })
+    }
+
+    /// Plan a command install: run external package-manager commands in fallback
+    /// order, writing the tool straight into `apps/<base_dir>`.
+    fn plan_command(
+        &self,
+        root: &Path,
+        target: &Target,
+        version: &Version,
+        selection: &Selection,
+    ) -> Result<Plan> {
+        if !selection.components.is_empty() {
+            return Err(crate::Error::Unsupported(
+                "components are only supported for the 'download' method",
+            ));
+        }
+        let raw_commands = self
+            .install
+            .commands
+            .get(&target.triplet())
+            .ok_or_else(|| crate::Error::UnsupportedPlatform {
                 target: target.triplet(),
+            })?;
+        let base_dir = PathBuf::from(&self.install.base_dir);
+        let staging = Staging::new(&root.join(".wanted"), &self.meta.name);
+        let staging_dir = staging.dir().to_path_buf();
+        let dest_dir = root.join(".wanted").join("apps").join(&base_dir);
+        let deltas = self.env_deltas(dest_dir.parent().unwrap_or(Path::new("")), version)?;
+        let commands = raw_commands
+            .iter()
+            .map(|raw| CommandInvocation::from_raw(raw, &dest_dir, version))
+            .collect();
+        let base = dest_dir.clone();
+        let download_to = staging_dir.join("downloads");
+
+        Ok(Plan {
+            name: self.meta.name.clone(),
+            version: version.clone(),
+            staging_dir,
+            download_to,
+            app_dir: dest_dir.clone(),
+            dest_dir,
+            staged_ops: vec![Op::RunCommand { commands, base }],
+            commit_ops: vec![Op::WriteEnv { deltas }],
+        })
+    }
+
+    /// Pick the asset URL for the current platform and source, substituting `{version}`.
+    fn install_url(&self, target: &Target, version: &Version, source: Option<&str>) -> Result<Url> {
+        let template = self.source_template(&self.install.assets, target, source)?;
+        Ok(Url::from(
+            template.replace("{version}", &version.to_string()),
+        ))
+    }
+
+    /// Push a Download + Unpack pair for one enabled component, extracted under
+    /// `staging_dir/app/<name>`.
+    fn component_ops(
+        &self,
+        component: &str,
+        target: &Target,
+        version: &Version,
+        source: Option<&str>,
+        staging_dir: &Path,
+        staged_ops: &mut Vec<Op>,
+    ) -> Result<()> {
+        let assets = self.install.components.get(component).ok_or_else(|| {
+            crate::Error::UnknownComponent {
+                name: component.to_string(),
             }
         })?;
+        let template = self.source_template(assets, target, source)?;
+        let url = Url::from(template.replace("{version}", &version.to_string()));
+        let to = staging_dir
+            .join("downloads")
+            .join(format!("{component}-{}", url.file_name()));
+        staged_ops.push(Op::Download {
+            url,
+            to: to.clone(),
+        });
+        staged_ops.push(Op::Unpack {
+            from: to,
+            to: staging_dir.join("app").join(component),
+        });
+        Ok(())
+    }
+
+    /// Resolve the URL template for the current platform and source across any
+    /// platform-keyed asset map (`assets` or a component's).
+    fn source_template<'a>(
+        &self,
+        assets: &'a AssetMap,
+        target: &Target,
+        source: Option<&str>,
+    ) -> Result<&'a str> {
+        let sources =
+            assets
+                .get(&target.triplet())
+                .ok_or_else(|| crate::Error::UnsupportedPlatform {
+                    target: target.triplet(),
+                })?;
         let name = source.unwrap_or(DEFAULT_SOURCE);
-        let template = sources
+        sources
             .get(name)
+            .map(String::as_str)
             .ok_or_else(|| crate::Error::SourceNotFound {
                 target: target.triplet(),
                 name: name.to_string(),
-            })?;
-        Ok(template.replace("{version}", version))
+            })
     }
 
     /// Compute the pure deltas from the manifest's env declarations (no side effects).
-    fn env_deltas(&self, apps_root: &Path, version: &str) -> Result<Vec<EnvDelta>> {
+    fn env_deltas(&self, apps_root: &Path, version: &Version) -> Result<Vec<EnvDelta>> {
         let mut deltas = Vec::new();
         let base = apps_root.join(&self.install.base_dir);
         let user_home = crate::env::user_home();
@@ -134,9 +315,9 @@ impl Manifest {
 }
 
 /// Expand template placeholders, joining relative paths under `base`.
-fn resolve_template(template: &str, base: &Path, user_home: &str, version: &str) -> String {
+fn resolve_template(template: &str, base: &Path, user_home: &str, version: &Version) -> String {
     let substituted = template
-        .replace("{version}", version)
+        .replace("{version}", &version.to_string())
         .replace("{user}", user_home);
     let value_path = Path::new(&substituted);
     if template.starts_with('$') || value_path.is_absolute() {
@@ -146,11 +327,16 @@ fn resolve_template(template: &str, base: &Path, user_home: &str, version: &str)
     }
 }
 
-/// Extract a file name from the URL for local persistence.
-fn archive_name(url: &str) -> String {
-    url.rsplit(['/', '\\'])
-        .next()
-        .filter(|s| !s.is_empty())
-        .unwrap_or("archive.bin")
-        .to_string()
+/// Expand installer args, substituting the install dir for `{base}` and the
+/// usual version/user placeholders.
+fn expand_installer_args(args: &[String], base: &Path, version: &Version) -> Vec<String> {
+    let base_str = base.to_string_lossy();
+    let user_home = crate::env::user_home();
+    args.iter()
+        .map(|arg| {
+            arg.replace("{base}", &base_str)
+                .replace("{version}", &version.to_string())
+                .replace("{user}", &user_home)
+        })
+        .collect()
 }

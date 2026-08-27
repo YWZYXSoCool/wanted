@@ -1,23 +1,38 @@
 //! Install receipts: persist a snapshot of the side effects produced by an
 //! install so uninstall can restore them precisely.
 //!
-//! A receipt records two things: the **pre-apply value** of every environment
-//! variable the install wrote, and the **tool directory** to remove on uninstall.
-//! This lets uninstall roll back fully without needing the plugin manifest.
+//! A receipt records two things: the **delta** of every environment variable the
+//! install wrote (op + value + pre-apply value), and the **tool directory** to
+//! remove on uninstall. This lets uninstall undo exactly what the install did,
+//! without needing the plugin manifest.
+//!
+//! PATH-like variables are uninstalled **relatively**: only the segment this
+//! install added is removed from the current value, so a later install added on
+//! top (or an earlier uninstall) never clobbers the others.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
+use crate::Version;
 use crate::engine::fs::Fs;
+use crate::env::EnvOp;
 
-/// A single environment variable's pre-apply snapshot.
+/// A single environment variable written by an install, with enough to reverse it.
+///
+/// For `Prepend`/`Append`, uninstall drops the applied `value` segment from the
+/// *current* value so later installs survive any uninstall order. For `Set` it
+/// restores the pre-apply `old` value (which owns the whole variable).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VarSnapshot {
     /// Variable name.
     pub name: String,
-    /// Value before install; `None` means it did not exist (uninstall deletes it).
+    /// How the install merged this variable.
+    pub op: EnvOp,
+    /// The segment/value the install applied (removed on uninstall for PATH-like vars).
+    pub value: String,
+    /// Value before install; meaningful only for `Set` (`None` means it did not exist).
     pub old: Option<String>,
 }
 
@@ -27,7 +42,7 @@ pub struct Receipt {
     /// Tool name.
     pub name: String,
     /// Installed version.
-    pub version: String,
+    pub version: Version,
     /// The installed tool root (under `apps`), removed wholesale on uninstall.
     pub app_dir: String,
     /// Environment variables written by the install, with their old values.

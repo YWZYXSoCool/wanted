@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use wanted::cli::ToolSpec;
 use wanted::engine::execute;
-use wanted::engine::{Ctx, Fs, RealDownloader, RealFs};
+use wanted::engine::{Ctx, DEFAULT_PARALLEL_WORKERS, Fs, RealDownloader, RealFs, RealProcess};
 use wanted::env::store::RealEnvStore;
 use wanted::plugin::Manifest;
 use wanted::receipt::{Receipt, VarSnapshot};
@@ -37,6 +37,12 @@ enum Commands {
         /// Named asset source to download from (e.g. a mirror); defaults to the plugin's `default` source.
         #[arg(long)]
         asset_source: Option<String>,
+        /// Optional component to also download (repeatable, e.g. `--with clang`).
+        #[arg(long = "with", value_name = "COMPONENT")]
+        with: Vec<String>,
+        /// Number of concurrent connections used to download a large asset.
+        #[arg(long, default_value_t = DEFAULT_PARALLEL_WORKERS)]
+        workers: usize,
     },
     /// Update an installed tool or plugin.
     #[command(alias = "u")]
@@ -58,6 +64,13 @@ enum Commands {
 }
 
 fn main() {
+    // Ctrl+C must trigger a graceful rollback, not an OS kill: signal the shared
+    // cancel flag so in-flight downloads abort and `execute` returns an error,
+    // which routes through the normal compensation path. Best-effort — a failed
+    // handler install (rare) leaves default Ctrl+C behavior intact.
+    let _ = ctrlc::set_handler(|| {
+        wanted::engine::cancel_flag().store(true, std::sync::atomic::Ordering::SeqCst)
+    });
     if let Err(error) = run() {
         eprintln!("error: {error}");
         std::process::exit(1);
@@ -75,9 +88,17 @@ fn run() -> wanted::Result<()> {
             tools,
             source,
             asset_source,
+            with,
+            workers,
         } => {
             for tool in tools {
-                install(&tool, source.clone(), asset_source.as_deref())?;
+                install(
+                    &tool,
+                    source.clone(),
+                    asset_source.as_deref(),
+                    &with,
+                    workers,
+                )?;
             }
             Ok(())
         }
@@ -111,6 +132,8 @@ fn install(
     spec: &ToolSpec,
     manifest_override: Option<PathBuf>,
     asset_source: Option<&str>,
+    with: &[String],
+    workers: usize,
 ) -> wanted::Result<()> {
     let name = spec.name();
     let version = spec.version();
@@ -120,15 +143,20 @@ fn install(
         manifest_override.unwrap_or_else(|| plugins_dir().join(format!("{name}.toml")));
     let manifest = Manifest::load(&manifest_path)?;
 
+    let selection = wanted::engine::plan::Selection {
+        source: asset_source,
+        components: with,
+    };
     let plan = manifest.plan(
         store.root(),
         &wanted::plugin::Target::current(),
         version,
-        asset_source,
+        &selection,
     )?;
 
     let fs = RealFs;
-    let downloader = RealDownloader;
+    let downloader = RealDownloader::with_workers(workers);
+    let process = RealProcess;
     let env = RealEnvStore::new();
     let snapshots = env_snapshots(&plan, &env)?;
     let reporter = TerminalReporter::new(&plan.name);
@@ -136,11 +164,12 @@ fn install(
         root: store.root().to_path_buf(),
         fs: &fs,
         downloader: &downloader,
+        runner: &process,
         env: &env,
         reporter: &reporter,
     };
     execute::execute(&plan, &ctx)?;
-    reporter.bar.finish_and_clear();
+    reporter.finish();
 
     let receipt = Receipt {
         name: plan.name.clone(),
@@ -154,8 +183,8 @@ fn install(
     Ok(())
 }
 
-/// Snapshot the pre-apply values of the variables the plan will write, to land
-/// in the receipt for rollback.
+/// Capture the applied delta and pre-apply value of every variable the plan will
+/// write, so the receipt can reverse each one precisely on uninstall.
 fn env_snapshots(
     plan: &wanted::engine::plan::Plan,
     env: &dyn wanted::env::EnvStore,
@@ -164,6 +193,8 @@ fn env_snapshots(
     for delta in plan.env_deltas() {
         out.push(VarSnapshot {
             name: delta.name.clone(),
+            op: delta.op,
+            value: delta.value.clone(),
             old: env.read(&delta.name)?,
         });
     }
@@ -209,27 +240,49 @@ fn uninstall(name: &str) -> wanted::Result<()> {
     }
 }
 
-/// Render engine progress events as a terminal spinner.
+/// Render engine progress events as a multi-line terminal display.
 ///
 /// Real downloads often lack `Content-Length`, so the total is unknown; forcing a
 /// deterministic progress bar would render an empty "0 B/0 B" bar at full width.
-/// Hence a fixed indeterminate spinner: the phase label as the message, plus a
-/// live byte count.
+/// Hence an indeterminate spinner line plus a live byte count, shown alongside a
+/// persistent status line (tool name, then the active phase) — two concurrently
+/// visible progress texts, decoupled from the single aggregated byte total the
+/// engine reports.
 struct TerminalReporter {
-    bar: indicatif::ProgressBar,
+    panel: indicatif::MultiProgress,
+    status: indicatif::ProgressBar,
+    spinner: indicatif::ProgressBar,
 }
 
 impl TerminalReporter {
     fn new(tool: &str) -> Self {
-        let bar = indicatif::ProgressBar::new_spinner().with_style(Self::style());
-        bar.set_message(format!("installing {tool}"));
-        Self { bar }
+        let panel = indicatif::MultiProgress::new();
+        let status = panel.add(indicatif::ProgressBar::new(0).with_style(Self::status_style()));
+        status.set_message(format!("installing {tool}"));
+        let spinner =
+            panel.add(indicatif::ProgressBar::new_spinner().with_style(Self::spinner_style()));
+        Self {
+            panel,
+            status,
+            spinner,
+        }
     }
 
-    fn style() -> indicatif::ProgressStyle {
-        indicatif::ProgressStyle::with_template("{msg} {spinner:.cyan} {bytes}")
+    /// A plain status line with no bar or spinner.
+    fn status_style() -> indicatif::ProgressStyle {
+        indicatif::ProgressStyle::with_template("{msg}").expect("static status template is valid")
+    }
+
+    /// The live-byte spinner line.
+    fn spinner_style() -> indicatif::ProgressStyle {
+        indicatif::ProgressStyle::with_template("{spinner:.cyan} {bytes}")
             .expect("static spinner template is valid")
             .tick_chars("|/-\\")
+    }
+
+    /// Clear every progress line so the final message prints cleanly.
+    fn finish(&self) {
+        let _ = self.panel.clear();
     }
 }
 
@@ -237,12 +290,12 @@ impl Reporter for TerminalReporter {
     fn report(&self, event: Progress) {
         match event {
             Progress::Phase(label) => {
-                self.bar.reset();
-                self.bar.set_message(label.to_string());
+                self.status.set_message(label.to_string());
+                self.spinner.set_position(0);
             }
             Progress::Bytes { done, .. } => {
-                self.bar.set_position(done);
-                self.bar.tick();
+                self.spinner.set_position(done);
+                self.spinner.tick();
             }
         }
     }

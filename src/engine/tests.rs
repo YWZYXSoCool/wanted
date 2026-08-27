@@ -7,10 +7,12 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::Error;
+use crate::Version;
 use crate::engine::execute;
 use crate::engine::fs::{Fs, MemFs};
 use crate::engine::ops::Op;
-use crate::engine::{Ctx, Downloader};
+use crate::engine::plan::Selection;
+use crate::engine::{Ctx, Downloader, Url};
 use crate::env::{EnvStore, MemEnvStore};
 use crate::plugin::{Manifest, Target};
 use crate::report::{Progress, Reporter, SilentReporter};
@@ -55,10 +57,20 @@ struct StubDownloader(Vec<u8>);
 impl Downloader for StubDownloader {
     fn fetch(
         &self,
-        _url: &str,
+        _url: &Url,
         _on_progress: &mut dyn FnMut(u64, Option<u64>),
     ) -> crate::Result<Vec<u8>> {
         Ok(self.0.clone())
+    }
+}
+
+/// A process runner that accepts every invocation (used where installing is not
+/// the behavior under test).
+struct NoopProcess;
+
+impl crate::engine::ProcessRunner for NoopProcess {
+    fn run(&self, _program: &Path, _args: &[String]) -> crate::Result<()> {
+        Ok(())
     }
 }
 
@@ -78,7 +90,7 @@ struct ChunkingDownloader;
 impl Downloader for ChunkingDownloader {
     fn fetch(
         &self,
-        _url: &str,
+        _url: &Url,
         on_progress: &mut dyn FnMut(u64, Option<u64>),
     ) -> crate::Result<Vec<u8>> {
         let body = tool_zip();
@@ -90,8 +102,22 @@ impl Downloader for ChunkingDownloader {
     }
 }
 
+fn vsn() -> Version {
+    Version::parse("1.23.0").unwrap()
+}
+
 fn plan_for(manifest: &Manifest, root: &Path) -> crate::engine::plan::Plan {
-    manifest.plan(root, &win_target(), "1.23", None).unwrap()
+    manifest
+        .plan(root, &win_target(), &vsn(), &Selection::default())
+        .unwrap()
+}
+
+/// A `Selection` naming exactly the given components against the `default` source.
+fn selection(components: &[String]) -> Selection<'_> {
+    Selection {
+        source: None,
+        components,
+    }
 }
 
 #[test]
@@ -100,7 +126,7 @@ fn plan_is_pure_and_well_structured() {
     let plan = plan_for(&manifest, Path::new("/root"));
 
     assert_eq!(plan.name, "golang");
-    assert_eq!(plan.version, "1.23");
+    assert_eq!(plan.version.to_string(), "1.23.0");
     assert_eq!(plan.staged_ops.len(), 2);
     assert!(matches!(plan.staged_ops[0], Op::Download { .. }));
     assert!(matches!(plan.staged_ops[1], Op::Unpack { .. }));
@@ -118,6 +144,7 @@ fn execute_commits_and_persists_env() {
         root: root.to_path_buf(),
         fs: &fs,
         downloader: &StubDownloader(tool_zip()),
+        runner: &NoopProcess,
         env: &env,
         reporter: &SilentReporter,
     };
@@ -146,6 +173,7 @@ fn execute_reports_phase_progress() {
         root: root.to_path_buf(),
         fs: &fs,
         downloader: &StubDownloader(tool_zip()),
+        runner: &NoopProcess,
         env: &env,
         reporter: &reporter,
     };
@@ -176,6 +204,7 @@ fn execute_reports_byte_progress_monotonically() {
         root: root.to_path_buf(),
         fs: &fs,
         downloader: &ChunkingDownloader,
+        runner: &NoopProcess,
         env: &env,
         reporter: &reporter,
     };
@@ -236,6 +265,7 @@ fn execute_rolls_back_when_commit_fails() {
         root: root.to_path_buf(),
         fs: &fs,
         downloader: &StubDownloader(tool_zip()),
+        runner: &NoopProcess,
         env: &env,
         reporter: &SilentReporter,
     };
@@ -255,7 +285,7 @@ fn plan_rejects_unsupported_platform() {
     let sparc = Target::parts("sparc64", "sparc", "");
     assert!(
         manifest
-            .plan(Path::new("/root"), &sparc, "1.23", None)
+            .plan(Path::new("/root"), &sparc, &vsn(), &Selection::default())
             .is_err()
     );
 }
@@ -263,7 +293,7 @@ fn plan_rejects_unsupported_platform() {
 /// Extract the URL of the plan's Download op, for asserting source selection.
 fn download_url(plan: &crate::engine::plan::Plan) -> &str {
     match &plan.staged_ops[0] {
-        Op::Download { url, .. } => url,
+        Op::Download { url, .. } => url.as_str(),
         _ => unreachable!("first staged op is always Download"),
     }
 }
@@ -272,23 +302,143 @@ fn download_url(plan: &crate::engine::plan::Plan) -> &str {
 fn plan_defaults_to_the_default_asset_source() {
     let manifest = Manifest::parse(GOLANG_TOML).unwrap();
     let plan = plan_for(&manifest, Path::new("/root"));
-    assert_eq!(download_url(&plan), "https://go.dev/d/1.23.zip");
+    assert_eq!(download_url(&plan), "https://go.dev/d/1.23.0.zip");
 }
 
 #[test]
 fn plan_uses_requested_asset_source() {
     let manifest = Manifest::parse(GOLANG_TOML).unwrap();
+    let selection = Selection {
+        source: Some("mirror"),
+        components: &[],
+    };
     let plan = manifest
-        .plan(Path::new("/root"), &win_target(), "1.23", Some("mirror"))
+        .plan(Path::new("/root"), &win_target(), &vsn(), &selection)
         .unwrap();
-    assert_eq!(download_url(&plan), "https://mirror/h/1.23.zip");
+    assert_eq!(download_url(&plan), "https://mirror/h/1.23.0.zip");
 }
 
 #[test]
 fn plan_rejects_unknown_asset_source() {
     let manifest = Manifest::parse(GOLANG_TOML).unwrap();
+    let selection = Selection {
+        source: Some("nope"),
+        components: &[],
+    };
     let err = manifest
-        .plan(Path::new("/root"), &win_target(), "1.23", Some("nope"))
+        .plan(Path::new("/root"), &win_target(), &vsn(), &selection)
         .unwrap_err();
     assert!(err.to_string().contains("no asset source nope"));
+}
+
+const COMPONENT_TOML: &str = r#"
+[meta]
+name = "llvm"
+version = "1.0.0"
+
+[install]
+method = "download"
+base_dir = "llvm"
+asset = { "x86_64-pc-windows-msvc" = { default = "https://ex/llvm-{version}.zip", mirror = "https://mirror/l-{version}.zip" } }
+
+[install.component]
+"clang" = { "x86_64-pc-windows-msvc" = { default = "https://ex/clang-{version}.zip", mirror = "https://mirror/c-{version}.zip" } }
+
+[env]
+PATH = "bin"
+CLANG = "clang/bin"
+"#;
+
+/// Extract the Unpack target path of the i-th staged op.
+fn unpack_target(plan: &crate::engine::plan::Plan, index: usize) -> &std::path::Path {
+    match &plan.staged_ops[index] {
+        Op::Unpack { to, .. } => to,
+        _ => unreachable!("staged op {index} is not Unpack"),
+    }
+}
+
+#[test]
+fn plan_downloads_no_components_by_default() {
+    let manifest = Manifest::parse(COMPONENT_TOML).unwrap();
+    let plan = manifest
+        .plan(
+            Path::new("/root"),
+            &win_target(),
+            &vsn(),
+            &Selection::default(),
+        )
+        .unwrap();
+    assert_eq!(plan.staged_ops.len(), 2);
+}
+
+#[test]
+fn plan_appends_download_and_unpack_for_requested_component() {
+    let manifest = Manifest::parse(COMPONENT_TOML).unwrap();
+    let plan = manifest
+        .plan(
+            Path::new("/root"),
+            &win_target(),
+            &vsn(),
+            &selection(&[String::from("clang")]),
+        )
+        .unwrap();
+    assert_eq!(plan.staged_ops.len(), 4);
+    assert!(
+        matches!(&plan.staged_ops[2], Op::Download { url, .. } if url.as_str() == "https://ex/clang-1.23.0.zip")
+    );
+    let unpack_to = unpack_target(&plan, 3);
+    assert_eq!(
+        unpack_to.file_name().and_then(|s| s.to_str()),
+        Some("clang")
+    );
+    assert_eq!(
+        unpack_to
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str()),
+        Some("app")
+    );
+}
+
+#[test]
+fn plan_dedupes_repeated_component_requests() {
+    let manifest = Manifest::parse(COMPONENT_TOML).unwrap();
+    let plan = manifest
+        .plan(
+            Path::new("/root"),
+            &win_target(),
+            &vsn(),
+            &selection(&[String::from("clang"), String::from("clang")]),
+        )
+        .unwrap();
+    assert_eq!(plan.staged_ops.len(), 4);
+}
+
+#[test]
+fn plan_rejects_unknown_component() {
+    let manifest = Manifest::parse(COMPONENT_TOML).unwrap();
+    let err = manifest
+        .plan(
+            Path::new("/root"),
+            &win_target(),
+            &vsn(),
+            &selection(&[String::from("bogus")]),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("no component 'bogus'"));
+}
+
+#[test]
+fn plan_component_uses_requested_asset_source() {
+    let manifest = Manifest::parse(COMPONENT_TOML).unwrap();
+    let selection = Selection {
+        source: Some("mirror"),
+        components: &["clang".to_string()],
+    };
+    let plan = manifest
+        .plan(Path::new("/root"), &win_target(), &vsn(), &selection)
+        .unwrap();
+    assert!(
+        matches!(&plan.staged_ops[2], Op::Download { url, .. } if url.as_str() == "https://mirror/c-1.23.0.zip")
+    );
 }
