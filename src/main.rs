@@ -23,8 +23,11 @@ enum Commands {
     /// Add a plugin manifest, making a tool installable.
     #[command(alias = "a")]
     Add {
-        /// Path to a plugin `.toml` to register.
-        plugin: PathBuf,
+        /// A local plugin `.toml` path, or a tool name to fetch as `<name>.toml` from the registry.
+        plugin: String,
+        /// Registry base URL to fetch from (default: the GitHub `wanted-registry`).
+        #[arg(long)]
+        registry: Option<String>,
     },
     /// Install a tool by invoking its plugin (`name@version`).
     #[command(alias = "i")]
@@ -83,7 +86,7 @@ fn run() -> wanted::Result<()> {
         return Ok(());
     };
     match command {
-        Commands::Add { plugin } => add_plugin(&plugin),
+        Commands::Add { plugin, registry } => add_plugin(&plugin, registry.as_deref()),
         Commands::Install {
             tools,
             source,
@@ -116,16 +119,45 @@ fn run() -> wanted::Result<()> {
     }
 }
 
-/// Register a local plugin manifest into `plugins/` next to the executable, so
-/// `install` can invoke it by name.
-fn add_plugin(source: &PathBuf) -> wanted::Result<()> {
-    let manifest = Manifest::load(source)?;
+/// Register a plugin manifest into `plugins/` next to the executable, so
+/// `install` can invoke it by name. The manifest is read from a local path, or
+/// fetched as `<name>.toml` from a plugin registry when the argument is not an
+/// existing file.
+fn add_plugin(target: &str, registry: Option<&str>) -> wanted::Result<()> {
+    let source = wanted::cli::resolve_add_source(target, registry);
+    let (label, data) = match source {
+        wanted::cli::PluginSource::Local(path) => (
+            path.display().to_string(),
+            std::fs::read(&path).map_err(|e| wanted::error::io_err(path.clone(), e))?,
+        ),
+        wanted::cli::PluginSource::Registry { url, .. } => (url.clone(), fetch_plugin(&url)?),
+    };
+    let manifest = Manifest::parse(bytes_to_manifest(&data)?)?;
     let dest = plugins_dir().join(format!("{}.toml", manifest.meta.name));
-    let data = std::fs::read(source).map_err(|e| wanted::error::io_err(source.clone(), e))?;
     let fs = RealFs;
     fs.write(&dest, &data)?;
-    println!("added plugin {}", manifest.meta.name);
+    println!("added plugin {} (from {label})", manifest.meta.name);
     Ok(())
+}
+
+/// Download a plugin manifest from a raw URL in full.
+fn fetch_plugin(url: &str) -> wanted::Result<Vec<u8>> {
+    use std::io::Read;
+    let response = ureq::get(url)
+        .call()
+        .map_err(|e| wanted::Error::Network(format!("failed to fetch {url}: {e}")))?;
+    let mut reader = response.into_reader();
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|e| wanted::Error::Network(format!("failed to read {url}: {e}")))?;
+    Ok(bytes)
+}
+
+/// Interpret plugin bytes as a manifest source string.
+fn bytes_to_manifest(data: &[u8]) -> wanted::Result<&str> {
+    std::str::from_utf8(data)
+        .map_err(|e| wanted::Error::Other(format!("plugin is not valid UTF-8: {e}")))
 }
 
 fn install(
@@ -147,19 +179,25 @@ fn install(
         source: asset_source,
         components: with,
     };
-    let plan = manifest.plan(
+    let plans = manifest.plan_chain(
         store.root(),
         &wanted::plugin::Target::current(),
         version,
         &selection,
-    )?;
+    );
+    if plans.is_empty() {
+        return Err(wanted::Error::Other(format!(
+            "no install method available for {name} on this platform"
+        )));
+    }
 
     let fs = RealFs;
     let downloader = RealDownloader::with_workers(workers);
     let process = RealProcess;
     let env = RealEnvStore::new();
-    let snapshots = env_snapshots(&plan, &env)?;
-    let reporter = TerminalReporter::new(&plan.name);
+    let ref_plan = &plans[0];
+    let snapshots = env_snapshots(ref_plan, &env)?;
+    let reporter = TerminalReporter::new(&ref_plan.name);
     let ctx = Ctx {
         root: store.root().to_path_buf(),
         fs: &fs,
@@ -168,7 +206,8 @@ fn install(
         env: &env,
         reporter: &reporter,
     };
-    execute::execute(&plan, &ctx)?;
+    let chosen = execute::execute_chain(&plans, &ctx)?;
+    let plan = &plans[chosen];
     reporter.finish();
 
     let receipt = Receipt {

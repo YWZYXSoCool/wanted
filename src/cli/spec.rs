@@ -29,11 +29,13 @@ pub struct ToolSpec {
 
 impl ToolSpec {
     /// The tool name, the part before `@`.
+    #[inline]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// The requested version, or `latest` when not pinned.
+    #[inline]
     pub fn version(&self) -> &Version {
         &self.version
     }

@@ -46,6 +46,9 @@ Register a plugin manifest, then install it:
 
 ```bash
 # register the plugin so `wanted install go` knows it
+# a tool name fetches `<name>.toml` from the default registry (GitHub wanted-registry)
+wanted add golang
+# or pass an existing local manifest path explicitly
 wanted add golang.toml
 
 # install a tool (optionally pinned to a version)
@@ -170,11 +173,50 @@ per-command `env` map expand `{base}` (the `apps/<base_dir>` directory),
 combined errors and aborts — a previous good install in `apps/<base_dir>` is
 never deleted. This method supports no components and needs no `asset`.
 
+**Fallback chain.** A `method` picks one mechanism. To try several in order —
+a system package manager first, then a plain link download — declare
+`install.fallback` with the extra methods, tried only after the primary
+`method` fails. Execution order is:
+
+```
+[primary method] → fallback[0] → fallback[1] → …
+```
+
+The first attempt that succeeds wins; only when **every** attempt fails does
+`wanted install` error. Each fallback entry reuses this section's already
+declared data (`install.asset` for download/installer, `install.command` for
+command), so nothing needs redeclaring. A method whose data is unavailable for
+the current platform (e.g. no `command` entry for Linux, or no `asset` for a
+macOS fallback) is skipped rather than aborting the chain:
+
+```toml
+[install]
+method = "command"           # 1) try the user's package managers first
+base_dir = "golang"
+fallback = ["download"]      # 2) fall back to a link download if all commands fail
+
+[install.command]
+"x86_64-pc-windows-msvc" = [
+  { tool = "winget", args = ["install", "GoLang.Go", "-h", "--override", "/TARGETDIR={base}"] },
+]
+
+[install.asset]
+"x86_64-pc-windows-msvc" = { default = "https://go.dev/dl/go{version}.windows-amd64.zip" }
+```
+
+Because wanted prepends `apps/<base_dir>/bin` to `PATH`, the managed copy always
+shadows anything already on the system — install-and-override is the intended
+semantics, so there is no "skip if already installed" knob.
+
+Only the package managers that install into wanted's managed `{base}` directory
+belong in `install.command`; a manager that plants tools system-wide (apt, brew)
+is left out, and that platform simply falls through to the download attempt.
+
 ## CLI reference
 
 | Command                        | Alias | Description                                            |
 | ------------------------------ | ----- | ------------------------------------------------------ |
-| `wanted add <plugin.toml>`     | `a`   | Register a plugin manifest, making a tool installable  |
+| `wanted add <name\|plugin.toml>` | `a`   | Register a plugin manifest (a tool name fetches `<name>.toml` from the default registry; `--registry <base>` overrides it), making a tool installable |
 | `wanted install <spec>...`     | `i`   | Install tools (`name@version`); `--source`, `--asset-source`, `--with <component>` |
 | `wanted update <tool\|plugin>` | `u`   | Update an installed tool or plugin (*M0 stub*)         |
 | `wanted remove <name>`         | `rm`  | Remove a registered plugin manifest                    |

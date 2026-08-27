@@ -182,3 +182,58 @@ base_dir = "bat"
 "#;
     assert!(Manifest::parse(source).is_err());
 }
+
+const CHAIN_TOML: &str = r#"
+[meta]
+name = "go"
+version = "1.0.0"
+
+[install]
+method = "command"
+base_dir = "golang"
+fallback = ["download"]
+asset = { "x86_64-pc-windows-msvc" = { default = "https://ex/go{version}.zip" } }
+
+[install.command]
+"x86_64-pc-windows-msvc" = [
+  { tool = "choco", args = ["install", "golang", "-y", "--params", "/InstallDir:{base}"] },
+]
+"#;
+
+#[test]
+fn parses_fallback_chain() {
+    let manifest = Manifest::parse(CHAIN_TOML).unwrap();
+    assert_eq!(manifest.install.method, InstallMethod::Command);
+    assert_eq!(manifest.install.fallback, [InstallMethod::Download]);
+}
+
+#[test]
+fn fallback_download_still_requires_assets() {
+    let source = r#"
+[meta]
+name = "go"
+version = "1.0.0"
+[install]
+method = "command"
+base_dir = "golang"
+fallback = ["download"]
+[install.command]
+"x86_64-pc-windows-msvc" = [{ tool = "choco", args = [] }]
+"#;
+    assert!(Manifest::parse(source).is_err());
+}
+
+#[test]
+fn fallback_command_still_requires_commands() {
+    let source = r#"
+[meta]
+name = "go"
+version = "1.0.0"
+[install]
+method = "download"
+base_dir = "golang"
+fallback = ["command"]
+asset = { "x86_64-pc-windows-msvc" = { default = "https://ex/go{version}.zip" } }
+"#;
+    assert!(Manifest::parse(source).is_err());
+}

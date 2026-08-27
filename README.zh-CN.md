@@ -31,6 +31,9 @@ cargo build --release
 
 ```bash
 # 注册插件，让 `wanted install go` 认识它
+# 传工具名会从默认仓库（GitHub wanted-registry）抓取 `<name>.toml`
+wanted add golang
+# 或者显式传一份本地清单路径
 wanted add golang.toml
 
 # 安装一个工具（可固定版本）
@@ -129,11 +132,45 @@ base_dir = "rust"
 
 `tool` 是可执行文件名（经 `PATH` 解析）。`args` 与每条命令的 `env` 映射的值会展开 `{base}`（即 `apps/<base_dir>` 目录）、`{version}`、`{user}` 占位。当所有命令都失败时，安装会汇总各错误并中止——**不会删除** `apps/<base_dir>` 中上一份安装。此方式不支持组件，也不需要 `asset`。
 
+**回退链（Fallback chain）**。`method` 只选一种机制。若想按顺序多试几种——先
+试系统包管理器，最后才回退到链接下载——就在 `install.fallback` 里声明额外
+的 method，只有当主 `method` 失败后才依次尝试。执行顺序为：
+
+```
+[主 method] → fallback[0] → fallback[1] → …
+```
+
+**首次成功即停**；只有当**所有**尝试都失败时 `wanted install` 才报错。每个回退
+条目复用本区已声明的数据（download/installer 用 `install.asset`，command 用
+`install.command`），无需重复声明。某 method 在当台平台上数据不可用（如 Linux
+没有 command 条目、macOS 没有 asset 条目）时，会跳过该尝试而不是中断整个链：
+
+```toml
+[install]
+method = "command"           # 1) 先试用户机器上的包管理器
+base_dir = "golang"
+fallback = ["download"]      # 2) 命令都失败时回退到链接下载
+
+[install.command]
+"x86_64-pc-windows-msvc" = [
+  { tool = "winget", args = ["install", "GoLang.Go", "-h", "--override", "/TARGETDIR={base}"] },
+]
+
+[install.asset]
+"x86_64-pc-windows-msvc" = { default = "https://go.dev/dl/go{version}.windows-amd64.zip" }
+```
+
+由于 wanted 把 `apps/<base_dir>/bin` 前置到 `PATH`，托管的副本总会遮住系统已装
+的东西——「安装并覆盖」才是我们想要的语义，所以没有「已装就跳过」这类开关。
+
+`install.command` 里只放能把工具装进 wanted 托管目录 `{base}` 的包管理器；像
+apt、brew 这类装到系统位置的管理器就不写进去，这类平台会直接落到下载尝试。
+
 ## CLI 参考
 
 | 命令                           | 别名 | 说明                                              |
 | ------------------------------ | ---- | ------------------------------------------------- |
-| `wanted add <plugin.toml>`     | `a`  | 注册插件清单，使工具可安装                          |
+| `wanted add <name\|plugin.toml>` | `a`  | 注册插件清单并使其可安装（传工具名会从默认仓库抓取 `<name>.toml`，可用 `--registry <base>` 覆盖） |
 | `wanted install <spec>...`     | `i`  | 安装工具（`name@version`）；支持 `--source`、`--asset-source`、`--with <component>` |
 | `wanted update <tool\|plugin>` | `u`  | 更新已安装的工具或插件（*M0 占位*）                 |
 | `wanted remove <name>`         | `rm` | 移除已注册的插件清单                                |

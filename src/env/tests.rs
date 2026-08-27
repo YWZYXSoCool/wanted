@@ -1,4 +1,4 @@
-//! Environment layer tests: delta merging and compensation replay.
+//! Environment layer tests: delta merging, compensation replay, and tool lookup.
 
 use super::{
     EnvDelta, EnvOp, EnvStore, MemEnvStore, PATH_SEP, apply_deltas, reverse_value, undo_delta,
@@ -97,7 +97,7 @@ fn undo_delta_set_restores_snapshot() {
         value: "/home/u/go".into(),
         op: EnvOp::Set,
     };
-    apply_deltas(&[delta.clone()], &store).unwrap();
+    apply_deltas(std::slice::from_ref(&delta), &store).unwrap();
     undo_delta(&delta, Some("/usr/local/go"), &store).unwrap();
     assert_eq!(store.read("GOROOT").unwrap().unwrap(), "/usr/local/go");
 }
@@ -111,7 +111,7 @@ fn undo_delta_set_without_old_removes_var() {
         value: "/home/u/go".into(),
         op: EnvOp::Set,
     };
-    apply_deltas(&[delta.clone()], &store).unwrap();
+    apply_deltas(std::slice::from_ref(&delta), &store).unwrap();
     undo_delta(&delta, None, &store).unwrap();
     assert_eq!(store.read("GOROOT").unwrap(), None);
 }

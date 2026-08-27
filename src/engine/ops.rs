@@ -77,6 +77,16 @@ impl Op {
             }
         }
     }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Op::Download { .. } => "Downloading",
+            Op::Unpack { .. } => "Extracting",
+            Op::RunInstaller { .. } => "Installing",
+            Op::RunCommand { .. } => "Installing",
+            Op::WriteEnv { .. } => "Configuring env",
+        }
+    }
 }
 
 /// One fully-expanded external command line (plan-time data, not an action).

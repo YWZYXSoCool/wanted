@@ -51,16 +51,19 @@ pub struct Receipt {
 
 impl Receipt {
     /// Serialize to TOML text.
+    #[inline]
     pub fn to_toml(&self) -> Result<String> {
         toml::to_string(self).map_err(|e| crate::Error::Manifest(e.to_string()))
     }
 
     /// Parse from TOML text.
+    #[inline]
     pub fn from_toml(source: &str) -> Result<Self> {
         toml::from_str(source).map_err(|e| crate::Error::Manifest(e.to_string()))
     }
 
     /// Write to the filesystem (implicitly creating parent directories).
+    #[inline]
     pub fn write(&self, fs: &dyn Fs, path: &Path) -> Result<()> {
         fs.write(path, self.to_toml()?.as_bytes())
     }

@@ -6,7 +6,7 @@
 
 use crate::Result;
 use crate::engine::Ctx;
-use crate::engine::ops::{Compensation, Op};
+use crate::engine::ops::Compensation;
 use crate::engine::plan::Plan;
 use crate::engine::staging::Staging;
 use crate::error::Error;
@@ -71,9 +71,27 @@ pub fn execute(plan: &Plan, ctx: &Ctx) -> Result<()> {
     }
 }
 
+/// Execute `plans` in order until one succeeds, returning its index. Each plan
+/// runs transactionally, so a failing attempt rolls back completely (including
+/// environment writes) before the next starts from a clean state. When every
+/// attempt fails, the panics-free error aggregates them.
+pub fn execute_chain(plans: &[Plan], ctx: &Ctx) -> Result<usize> {
+    let mut failures = Vec::new();
+    for (index, plan) in plans.iter().enumerate() {
+        match execute(plan, ctx) {
+            Ok(()) => return Ok(index),
+            Err(error) => failures.push(format!("{} attempt {}: {error}", plan.name, index + 1)),
+        }
+    }
+    Err(Error::Other(format!(
+        "all install attempts failed: {}",
+        failures.join("; ")
+    )))
+}
+
 fn run_phases(plan: &Plan, ctx: &Ctx, log: &mut UndoLog) -> Result<()> {
     for op in &plan.staged_ops {
-        ctx.reporter.report(Progress::Phase(op_label(op)));
+        ctx.reporter.report(Progress::Phase(op.label()));
         log.push(op.apply(ctx)?);
     }
 
@@ -87,22 +105,11 @@ fn run_phases(plan: &Plan, ctx: &Ctx, log: &mut UndoLog) -> Result<()> {
     }
 
     for op in &plan.commit_ops {
-        ctx.reporter.report(Progress::Phase(op_label(op)));
+        ctx.reporter.report(Progress::Phase(op.label()));
         log.push(op.apply(ctx)?);
     }
 
     Ok(())
-}
-
-/// The phase label for one op, shown by the progress bar before it runs.
-fn op_label(op: &Op) -> &'static str {
-    match op {
-        Op::Download { .. } => "Downloading",
-        Op::Unpack { .. } => "Extracting",
-        Op::RunInstaller { .. } => "Installing",
-        Op::RunCommand { .. } => "Installing",
-        Op::WriteEnv { .. } => "Configuring env",
-    }
 }
 
 fn merge_errors(original: Error, report: RollbackReport) -> Error {

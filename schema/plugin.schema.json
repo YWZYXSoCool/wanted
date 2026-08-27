@@ -157,6 +157,13 @@
             }
           ]
         },
+        "fallback": {
+          "description": "Fallback install methods, tried in order after the primary `method`\nfails. Each entry reuses this section's already-declared data\n(`asset`, `command`, `args`).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InstallMethod"
+          }
+        },
         "method": {
           "description": "Install method.",
           "$ref": "#/$defs/InstallMethod"

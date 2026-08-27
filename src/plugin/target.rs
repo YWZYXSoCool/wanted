@@ -10,6 +10,7 @@ pub struct Target {
 
 impl Target {
     /// The current compile target's platform.
+    #[inline]
     pub const fn current() -> Target {
         Target {
             arch: std::env::consts::ARCH,
@@ -19,7 +20,8 @@ impl Target {
     }
 
     /// Explicitly construct a target, for cross-module tests and tooling.
-    pub fn parts(arch: &'static str, os: &'static str, env: &'static str) -> Target {
+    #[inline]
+    pub const fn parts(arch: &'static str, os: &'static str, env: &'static str) -> Target {
         Target { arch, os, env }
     }
 
@@ -35,6 +37,7 @@ impl Target {
 }
 
 /// Resolve the current target ABI (`msvc` / `gnu` / `musl`; unknown is `""`).
+#[inline]
 const fn current_env() -> &'static str {
     if cfg!(target_env = "msvc") {
         "msvc"

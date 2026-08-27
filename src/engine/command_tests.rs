@@ -40,11 +40,6 @@ fn target() -> Target {
     Target::parts("x86_64", "windows", "msvc")
 }
 
-/// The absolute `apps/<base_dir>` the commands promise to fill.
-fn expected_base(root: &Path) -> std::path::PathBuf {
-    root.join(".wanted").join("apps").join("bat")
-}
-
 /// The app's PATH segment declared by `[env]`.
 fn expected_path(root: &Path) -> String {
     root.join(".wanted")
@@ -79,12 +74,15 @@ impl Downloader for StubDownloader {
     }
 }
 
+/// A recorded child-process invocation: program, args, and extra environment.
+type ProcessCall = (String, Vec<String>, Vec<(String, String)>);
+
 /// A process runner that fails the first `remaining` invocations (driving the
 /// fallback for a missing tool or a non-zero exit alike), then succeeds, while
 /// recording every call.
 struct FlakyProcess {
     remaining: RefCell<usize>,
-    calls: RefCell<Vec<(String, Vec<String>, Vec<(String, String)>)>>,
+    calls: RefCell<Vec<ProcessCall>>,
 }
 
 impl FlakyProcess {
@@ -313,4 +311,118 @@ fn command_install_rolls_back_dest_on_env_failure() {
 
     assert!(err.to_string().contains("simulated"));
     assert!(!fs.exists(&plan.dest_dir).unwrap());
+}
+
+const CHAIN_TOML: &str = r#"
+[meta]
+name = "go"
+version = "1.23.0"
+
+[install]
+method = "command"
+base_dir = "golang"
+fallback = ["download"]
+
+[install.asset]
+"x86_64-pc-windows-msvc" = { default = "https://go.dev/d/{version}.zip" }
+"x86_64-unknown-linux-gnu" = { default = "https://go.dev/d/{version}.linux.zip" }
+
+[install.command]
+"x86_64-pc-windows-msvc" = [
+  { tool = "winget", args = ["install", "GoLang.Go", "-h"] },
+]
+
+[env]
+PATH = "bin"
+"#;
+
+fn chain_plans(root: &Path) -> Vec<crate::engine::plan::Plan> {
+    let manifest = Manifest::parse(CHAIN_TOML).unwrap();
+    manifest.plan_chain(root, &target(), &vsn(), &Selection::default())
+}
+
+/// A valid zip containing `go/bin/go.exe`, for the download fallback to unpack.
+fn go_zip() -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    use zip::write::SimpleFileOptions;
+    let mut zip_writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    zip_writer.start_file("go/bin/go.exe", options).unwrap();
+    zip_writer.write_all(b"binary").unwrap();
+    zip_writer.finish().unwrap().into_inner()
+}
+
+#[test]
+fn plan_chain_orders_command_before_download() {
+    let plans = chain_plans(Path::new("/root"));
+    assert_eq!(plans.len(), 2);
+    assert!(matches!(plans[0].staged_ops[0], Op::RunCommand { .. }));
+    assert!(matches!(plans[1].staged_ops[0], Op::Download { .. }));
+}
+
+#[test]
+fn plan_chain_skips_platform_methods_without_data() {
+    let manifest = Manifest::parse(CHAIN_TOML).unwrap();
+    let linux = Target::parts("x86_64", "linux", "gnu");
+    let plans = manifest.plan_chain(Path::new("/root"), &linux, &vsn(), &Selection::default());
+    assert_eq!(plans.len(), 1);
+    assert!(matches!(plans[0].staged_ops[0], Op::Download { .. }));
+
+    let sparc = Target::parts("sparc64", "linux", "gnu");
+    assert!(
+        manifest
+            .plan_chain(Path::new("/root"), &sparc, &vsn(), &Selection::default())
+            .is_empty()
+    );
+}
+
+#[test]
+fn execute_chain_falls_back_to_download_when_command_fails() {
+    let fs = MemFs::new();
+    let env = MemEnvStore::new();
+    let root = Path::new("/root");
+    let runner = FlakyProcess::new(1);
+    let ctx = Ctx {
+        root: root.to_path_buf(),
+        fs: &fs,
+        downloader: &StubDownloader(go_zip()),
+        runner: &runner,
+        env: &env,
+        reporter: &SilentReporter,
+    };
+    let plans = chain_plans(root);
+
+    let index = execute::execute_chain(&plans, &ctx).unwrap();
+
+    assert_eq!(index, 1);
+    assert!(fs.exists(&plans[1].dest_dir).unwrap());
+    let expected = root.join(".wanted").join("apps").join("golang").join("bin");
+    assert_eq!(
+        env.read("PATH").unwrap().unwrap(),
+        expected.to_string_lossy()
+    );
+}
+
+#[test]
+fn execute_chain_errors_when_every_attempt_fails() {
+    let fs = MemFs::new();
+    let env = MemEnvStore::new();
+    let root = Path::new("/root");
+    let runner = FlakyProcess::new(1);
+    let ctx = Ctx {
+        root: root.to_path_buf(),
+        fs: &fs,
+        downloader: &StubDownloader(b"not a zip".to_vec()),
+        runner: &runner,
+        env: &env,
+        reporter: &SilentReporter,
+    };
+    let plans = chain_plans(root);
+
+    let err = execute::execute_chain(&plans, &ctx).unwrap_err();
+
+    assert!(
+        err.to_string().contains("all install attempts failed"),
+        "{err}"
+    );
 }

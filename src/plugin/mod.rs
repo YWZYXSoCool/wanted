@@ -52,6 +52,9 @@ pub struct Install {
     /// External install commands for the `command` method, keyed by platform
     /// triplet; the ordered list is tried in fallback order until one succeeds.
     pub commands: BTreeMap<String, Vec<RawCommand>>,
+    /// Fallback install methods, tried in order after the primary `method`
+    /// fails; each reuses this section's already-declared data.
+    pub fallback: Vec<InstallMethod>,
 }
 
 /// A validated plugin manifest.
@@ -88,16 +91,22 @@ impl Manifest {
         let version = raw.meta.version.ok_or(Error::MissingField {
             field: "meta.version",
         })?;
-        if matches!(
-            raw.install.method,
-            InstallMethod::Download | InstallMethod::Installer
-        ) && raw.install.asset.is_empty()
-        {
+        let mut attempts = raw
+            .install
+            .fallback
+            .iter()
+            .copied()
+            .chain(std::iter::once(raw.install.method));
+        let archive_attempt = {
+            let mut it = attempts.clone();
+            it.any(|m| matches!(m, InstallMethod::Download | InstallMethod::Installer))
+        };
+        if archive_attempt && raw.install.asset.is_empty() {
             return Err(Error::MissingField {
                 field: "install.asset",
             });
         }
-        if raw.install.method == InstallMethod::Command && raw.install.command.is_empty() {
+        if attempts.any(|m| m == InstallMethod::Command) && raw.install.command.is_empty() {
             return Err(Error::MissingField {
                 field: "install.command",
             });
@@ -117,6 +126,7 @@ impl Manifest {
                 args: raw.install.args,
                 strategy: raw.install.strategy,
                 commands: raw.install.command,
+                fallback: raw.install.fallback,
             },
             env: raw.env,
         })

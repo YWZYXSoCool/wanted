@@ -116,4 +116,9 @@ pub struct RawInstall {
     /// triplet; the ordered list is tried in fallback order until one succeeds.
     #[serde(default)]
     pub command: BTreeMap<String, Vec<RawCommand>>,
+    /// Fallback install methods, tried in order after the primary `method`
+    /// fails. Each entry reuses this section's already-declared data
+    /// (`asset`, `command`, `args`).
+    #[serde(default)]
+    pub fallback: Vec<InstallMethod>,
 }

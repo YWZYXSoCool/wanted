@@ -71,6 +71,49 @@ impl Manifest {
         selection: &Selection,
     ) -> Result<Plan> {
         let (method, args) = self.install.method_for(target);
+        self.plan_method(method, args, root, target, version, selection)
+    }
+
+    /// Build the ordered fallback chain of buildable plans: `[primary]` then
+    /// every declared `fallback` method that resolves for this platform. A
+    /// method whose data is unavailable for `target` is skipped, so the caller
+    /// (`execute_chain`) can fall through to the next one instead of aborting.
+    pub fn plan_chain(
+        &self,
+        root: &Path,
+        target: &Target,
+        version: &Version,
+        selection: &Selection,
+    ) -> Vec<Plan> {
+        let (method, args) = self.install.method_for(target);
+        let mut plans = Vec::new();
+        if let Ok(plan) = self.plan_method(method, args, root, target, version, selection) {
+            plans.push(plan);
+        }
+        for fallback in self.install.fallback.iter().filter(|m| *m != method) {
+            let attempts: &[String] = if *fallback == InstallMethod::Installer {
+                &self.install.args
+            } else {
+                &[]
+            };
+            if let Ok(plan) = self.plan_method(fallback, attempts, root, target, version, selection)
+            {
+                plans.push(plan);
+            }
+        }
+        plans
+    }
+
+    /// Build a plan for one explicit method, dispatching on its data.
+    fn plan_method(
+        &self,
+        method: &InstallMethod,
+        args: &[String],
+        root: &Path,
+        target: &Target,
+        version: &Version,
+        selection: &Selection,
+    ) -> Result<Plan> {
         match method {
             InstallMethod::Installer => self.plan_installer(root, target, version, selection, args),
             InstallMethod::System => Err(crate::Error::Unsupported(

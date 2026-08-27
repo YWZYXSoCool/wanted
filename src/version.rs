@@ -32,6 +32,7 @@ impl Version {
 impl FromStr for Version {
     type Err = semver::Error;
 
+    #[inline]
     fn from_str(source: &str) -> Result<Self, Self::Err> {
         Version::parse(source)
     }
@@ -49,6 +50,7 @@ impl fmt::Display for Version {
 
 impl Serialize for Version {
     /// Serialize as the printable version string.
+    #[inline]
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_string())
     }
