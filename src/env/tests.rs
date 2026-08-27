@@ -7,22 +7,25 @@ use super::{
 #[test]
 fn prepend_inserts_at_front_with_dedup() {
     let store = MemEnvStore::new();
-    store.write("PATH", "C:\\old\\bin").unwrap();
+    // Use separator-neutral paths so the test passes on both `;` (Windows) and
+    // `:` (POSIX) platforms.
+    store.write("PATH", "/old/bin").unwrap();
     let deltas = [EnvDelta {
         name: "PATH".into(),
-        value: "C:\\apps\\go\\bin".into(),
+        value: "/apps/go/bin".into(),
         op: EnvOp::Prepend,
     }];
     apply_deltas(&deltas, &store).unwrap();
     assert_eq!(
         store.read("PATH").unwrap().unwrap(),
-        format!("C:\\apps\\go\\bin{PATH_SEP}C:\\old\\bin")
+        format!("/apps/go/bin{PATH_SEP}/old/bin")
     );
 
+    // Re-applying the same delta must not duplicate the segment.
     apply_deltas(&deltas, &store).unwrap();
     assert_eq!(
         store.read("PATH").unwrap().unwrap(),
-        format!("C:\\apps\\go\\bin{PATH_SEP}C:\\old\\bin")
+        format!("/apps/go/bin{PATH_SEP}/old/bin")
     );
 }
 
@@ -67,9 +70,10 @@ fn reverse_prepend_removes_only_applied_segment() {
         value: "/apps/golang/bin".into(),
         op: EnvOp::Prepend,
     };
-    let current = format!("/apps/golang/bin;{PATH_SEP}/apps/gcc/bin;/usr/bin");
+    let current =
+        format!("/apps/golang/bin{PATH_SEP}/apps/gcc/bin{PATH_SEP}/usr/bin");
     let next = reverse_value(&applied, Some("/usr/bin"), Some(&current), PATH_SEP).unwrap();
-    assert_eq!(next, "/apps/gcc/bin;/usr/bin");
+    assert_eq!(next, format!("/apps/gcc/bin{PATH_SEP}/usr/bin"));
 }
 
 #[test]

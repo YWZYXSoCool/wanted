@@ -8,7 +8,7 @@ use crate::Receipt;
 use crate::VarSnapshot;
 use crate::Version;
 use crate::engine::fs::{Fs, MemFs};
-use crate::env::{EnvDelta, EnvOp, EnvStore, MemEnvStore};
+use crate::env::{EnvDelta, EnvOp, EnvStore, MemEnvStore, PATH_SEP};
 
 #[test]
 fn apply_receipt_removes_app_and_restores_env() {
@@ -19,7 +19,9 @@ fn apply_receipt_removes_app_and_restores_env() {
         .unwrap();
     env.write(
         "PATH",
-        "/root/.wanted/apps/golang/bin;/root/.wanted/apps/gcc/bin;/usr/bin",
+        &format!(
+            "/root/.wanted/apps/golang/bin{PATH_SEP}/root/.wanted/apps/gcc/bin{PATH_SEP}/usr/bin"
+        ),
     )
     .unwrap();
     env.write("GOROOT", "/root/.wanted/apps/golang").unwrap();
@@ -49,7 +51,7 @@ fn apply_receipt_removes_app_and_restores_env() {
     assert!(!fs.exists(app_root).unwrap());
     assert_eq!(
         env.read("PATH").unwrap().unwrap(),
-        "/root/.wanted/apps/gcc/bin;/usr/bin"
+        format!("/root/.wanted/apps/gcc/bin{PATH_SEP}/usr/bin")
     );
     assert_eq!(env.read("GOROOT").unwrap(), None);
 }
@@ -95,7 +97,7 @@ fn uninstall_of_earlier_app_preserves_later_app_path() {
             name: "PATH".to_string(),
             op: EnvOp::Prepend,
             value: "/root/.wanted/apps/golang/bin".to_string(),
-            old: Some("/root/.wanted/apps/gcc/bin;/usr/bin".to_string()),
+            old: Some(format!("/root/.wanted/apps/gcc/bin{PATH_SEP}/usr/bin")),
         }],
     };
     crate::env::apply_deltas(
@@ -109,7 +111,9 @@ fn uninstall_of_earlier_app_preserves_later_app_path() {
     .unwrap();
     assert_eq!(
         env.read("PATH").unwrap().unwrap(),
-        "/root/.wanted/apps/golang/bin;/root/.wanted/apps/gcc/bin;/usr/bin"
+        format!(
+            "/root/.wanted/apps/golang/bin{PATH_SEP}/root/.wanted/apps/gcc/bin{PATH_SEP}/usr/bin"
+        )
     );
 
     // Uninstall A (the earlier one) first.
