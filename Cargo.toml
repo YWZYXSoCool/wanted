@@ -12,8 +12,10 @@ thiserror = "2"
 toml = "0.8"
 ureq = "2"
 indicatif = "0.18"
-winreg = { version = "0.55", features = ["serialization-serde"] }
 zip = {version = "2", default-features = false, features = ["deflate"]}
+
+[target.'cfg(windows)'.dependencies]
+winreg = { version = "0.55", features = ["serialization-serde"] }
 
 [dev-dependencies]
 tempfile = "3"

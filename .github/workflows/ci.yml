@@ -37,3 +37,73 @@ jobs:
 
       - name: Test
         run: cargo test --all-targets
+
+  # Build release binaries for each OS. Artifacts outlive the run (default 90-day
+  # retention) and can be grabbed later by the tag-triggered gh-release job.
+  release:
+    name: Build release (${{ matrix.tag }})
+    needs: check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: linux
+            os: ubuntu-latest
+          - tag: windows
+            os: windows-latest
+          - tag: macos
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        shell: bash
+        run: cargo build --release --locked
+
+      # Normalize the binary name to wanted-<ref>-<os>-<arch>[.exe] so the final
+      # release carries a consistent, self-describing set of assets.
+      - name: Prepare asset name
+        id: asset
+        shell: bash
+        run: |
+          exe=""
+          if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
+          echo "name=wanted-${GITHUB_REF_NAME}-${{ matrix.tag }}-x86_64${exe}" >> "$GITHUB_OUTPUT"
+          echo "exe=${exe}" >> "$GITHUB_OUTPUT"
+
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p out
+          cp "target/release/wanted${{ steps.asset.outputs.exe }}" "out/${{ steps.asset.outputs.name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wanted-${{ matrix.tag }}
+          path: out
+          if-no-files-found: error
+
+  # Publish a GitHub Release only when a tag is pushed. Downloads every OS's
+  # artifact and attaches each binary to the release for the tagged version.
+  gh-release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
