@@ -114,6 +114,17 @@ jobs:
           path: out
           merge-multiple: true
 
+      # Self-upgrade (`wanted upgrade`) enforces a SHA-256 on the downloaded
+      # binary, so each release must carry a `<binary>.sha256` companion file.
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd out
+          for f in wanted-*; do
+            [ "${f##*.}" = "sha256" ] && continue
+            sha256sum "$f" > "$f.sha256"
+          done
+
       - uses: softprops/action-gh-release@v2
         with:
           files: out/*

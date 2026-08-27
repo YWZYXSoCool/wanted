@@ -218,10 +218,9 @@ is left out, and that platform simply falls through to the download attempt.
 | ------------------------------ | ----- | ------------------------------------------------------ |
 | `wanted add <name\|plugin.toml>` | `a`   | Register a plugin manifest (a tool name fetches `<name>.toml` from the default registry; `--registry <base>` overrides it), making a tool installable |
 | `wanted install <spec>...`     | `i`   | Install tools (`name@version`); `--source`, `--asset-source`, `--with <component>` |
-| `wanted update <tool\|plugin>` | `u`   | Update an installed tool or plugin (*M0 stub*)         |
 | `wanted remove <name>`         | `rm`  | Remove a registered plugin manifest                    |
 | `wanted uninstall <name>`      | `un`  | Uninstall a tool and restore its environment           |
-| `wanted upgrade`               | —     | Upgrade `wanted` itself (*M0 stub*)                    |
+| `wanted upgrade`               | —     | Upgrade `wanted` itself from the latest GitHub release (checksum-verified, rollback-safe swap) |
 | `wanted list`                  | `ls`  | List installed tools                                   |
 
 ## Layout
@@ -236,7 +235,7 @@ is left out, and that platform simply falls through to the download attempt.
 ## Status
 
 The core pipeline (plan → download → unpack → commit → receipt) is implemented
-and tested. `update` and `upgrade` are currently placeholders.
+and tested. Self-upgrade (`upgrade`) is checksum-verified and rollback-safe.
 
 ## License
 

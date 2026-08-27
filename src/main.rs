@@ -13,6 +13,7 @@ use wanted::store::Store;
 #[derive(Parser)]
 #[command(name = "wanted")]
 #[command(about = "Development environment installer.", long_about = None)]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -47,12 +48,6 @@ enum Commands {
         #[arg(long, default_value_t = DEFAULT_PARALLEL_WORKERS)]
         workers: usize,
     },
-    /// Update an installed tool or plugin.
-    #[command(alias = "u")]
-    Update {
-        /// Target to update (`tool` or `plugin`).
-        target: String,
-    },
     /// Remove a registered plugin manifest.
     #[command(alias = "rm")]
     Remove { name: String },
@@ -81,6 +76,7 @@ fn main() {
 }
 
 fn run() -> wanted::Result<()> {
+    let _ = wanted::upgrade::Upgrader::cleanup_stale(&RealFs);
     let cli = Cli::parse();
     let Some(command) = cli.command else {
         return Ok(());
@@ -105,16 +101,9 @@ fn run() -> wanted::Result<()> {
             }
             Ok(())
         }
-        Commands::Update { target } => {
-            println!("update {target}: not yet implemented in M0");
-            Ok(())
-        }
         Commands::Remove { name } => remove_plugin(&name),
         Commands::Uninstall { name } => uninstall(&name),
-        Commands::Upgrade => {
-            println!("self-upgrade: not yet implemented in M0");
-            Ok(())
-        }
+        Commands::Upgrade => upgrade(),
         Commands::List => list(),
     }
 }
@@ -276,6 +265,24 @@ fn uninstall(name: &str) -> wanted::Result<()> {
             println!("uninstalled {} {}", receipt.name, receipt.version);
             Ok(())
         }
+    }
+}
+
+/// Upgrade `wanted` itself from the latest GitHub release.
+fn upgrade() -> wanted::Result<()> {
+    let fs = RealFs;
+    let downloader = RealDownloader::default();
+    let reporter = TerminalReporter::new("wanted");
+    match wanted::upgrade::Upgrader::upgrade(&fs, &downloader, &reporter) {
+        Ok(wanted::upgrade::UpgradeOutcome::UpToDate) => {
+            println!("wanted is up to date");
+            Ok(())
+        }
+        Ok(wanted::upgrade::UpgradeOutcome::Upgraded(version)) => {
+            println!("upgraded wanted to {version}");
+            Ok(())
+        }
+        Err(error) => Err(error),
     }
 }
 

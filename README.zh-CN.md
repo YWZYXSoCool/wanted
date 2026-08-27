@@ -172,10 +172,9 @@ apt、brew 这类装到系统位置的管理器就不写进去，这类平台会
 | ------------------------------ | ---- | ------------------------------------------------- |
 | `wanted add <name\|plugin.toml>` | `a`  | 注册插件清单并使其可安装（传工具名会从默认仓库抓取 `<name>.toml`，可用 `--registry <base>` 覆盖） |
 | `wanted install <spec>...`     | `i`  | 安装工具（`name@version`）；支持 `--source`、`--asset-source`、`--with <component>` |
-| `wanted update <tool\|plugin>` | `u`  | 更新已安装的工具或插件（*M0 占位*）                 |
 | `wanted remove <name>`         | `rm` | 移除已注册的插件清单                                |
 | `wanted uninstall <name>`      | `un` | 卸载工具并还原其环境变量                             |
-| `wanted upgrade`               | —    | 升级 `wanted` 自身（*M0 占位*）                     |
+| `wanted upgrade`               | —    | 从最新 GitHub release 升级 `wanted` 自身（校验和验证 + 可回滚的热替换） |
 | `wanted list`                  | `ls` | 列出已安装的工具                                    |
 
 ## 目录布局
@@ -189,7 +188,7 @@ apt、brew 这类装到系统位置的管理器就不写进去，这类平台会
 
 ## 状态
 
-核心管线（规划 → 下载 → 解压 → 提交 → 收据）已实现并通过测试。`update` 与 `upgrade` 目前为占位。
+核心管线（规划 → 下载 → 解压 → 提交 → 收据）已实现并通过测试。自升级（`upgrade`）已实现校验和验证与可回滚替换。
 
 ## 许可证
 

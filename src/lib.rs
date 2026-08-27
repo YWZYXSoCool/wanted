@@ -16,6 +16,7 @@ pub mod receipt;
 pub mod report;
 pub mod store;
 pub mod uninstall;
+pub mod upgrade;
 pub mod version;
 
 pub use error::Error;

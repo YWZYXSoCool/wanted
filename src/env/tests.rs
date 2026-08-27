@@ -70,8 +70,7 @@ fn reverse_prepend_removes_only_applied_segment() {
         value: "/apps/golang/bin".into(),
         op: EnvOp::Prepend,
     };
-    let current =
-        format!("/apps/golang/bin{PATH_SEP}/apps/gcc/bin{PATH_SEP}/usr/bin");
+    let current = format!("/apps/golang/bin{PATH_SEP}/apps/gcc/bin{PATH_SEP}/usr/bin");
     let next = reverse_value(&applied, Some("/usr/bin"), Some(&current), PATH_SEP).unwrap();
     assert_eq!(next, format!("/apps/gcc/bin{PATH_SEP}/usr/bin"));
 }
