@@ -1,6 +1,6 @@
 //! Environment layer tests: delta merging and compensation replay.
 
-use super::{EnvDelta, EnvOp, EnvStore, MemEnvStore, apply_deltas};
+use super::{EnvDelta, EnvOp, EnvStore, MemEnvStore, PATH_SEP, apply_deltas};
 
 #[test]
 fn prepend_inserts_at_front_with_dedup() {
@@ -14,13 +14,13 @@ fn prepend_inserts_at_front_with_dedup() {
     apply_deltas(&deltas, &store).unwrap();
     assert_eq!(
         store.read("PATH").unwrap().unwrap(),
-        "C:\\apps\\go\\bin;C:\\old\\bin"
+        format!("C:\\apps\\go\\bin{PATH_SEP}C:\\old\\bin")
     );
 
     apply_deltas(&deltas, &store).unwrap();
     assert_eq!(
         store.read("PATH").unwrap().unwrap(),
-        "C:\\apps\\go\\bin;C:\\old\\bin"
+        format!("C:\\apps\\go\\bin{PATH_SEP}C:\\old\\bin")
     );
 }
 
