@@ -60,6 +60,9 @@ enum Commands {
     /// List installed tools.
     #[command(alias = "ls")]
     List,
+    /// Add wanted's own directory to PATH so `wanted` is callable directly.
+    #[command(alias = "use")]
+    Env,
 }
 
 fn main() {
@@ -106,6 +109,7 @@ fn run() -> wanted::Result<()> {
         Commands::Uninstall { name } => uninstall(&DirName::try_from(name)?),
         Commands::Upgrade => upgrade(),
         Commands::List => list(),
+        Commands::Env => add_self_to_path(),
     }
 }
 
@@ -184,7 +188,7 @@ fn install(
     let fs = RealFs;
     let downloader = RealDownloader::with_workers(workers);
     let process = RealProcess;
-    let env = RealEnvStore::new();
+    let env = RealEnvStore::new()?;
     let ref_plan = &plans[0];
     let snapshots = env_snapshots(ref_plan, &env)?;
     let reporter = TerminalReporter::new(ref_plan.name.as_str());
@@ -249,7 +253,7 @@ fn remove_plugin(name: &DirName) -> wanted::Result<()> {
 fn uninstall(name: &DirName) -> wanted::Result<()> {
     let store = store_at_cwd();
     let fs = RealFs;
-    let env = RealEnvStore::new();
+    let env = RealEnvStore::new()?;
     let receipt_path = store.receipt_path(name);
     match Receipt::read(&fs, &receipt_path)? {
         None => {
@@ -368,4 +372,25 @@ fn plugins_dir() -> PathBuf {
         .ok()
         .and_then(|exe| exe.parent().map(|dir| dir.join("plugins")))
         .unwrap_or_else(|| PathBuf::from("plugins"))
+}
+
+/// The directory holding this executable, added to PATH by `wanted env`.
+fn self_dir() -> wanted::Result<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from))
+        .ok_or_else(|| wanted::Error::Other("cannot locate the wanted executable".into()))
+}
+
+/// Put `wanted` itself on PATH so it can be called directly from any shell.
+fn add_self_to_path() -> wanted::Result<()> {
+    let dir = self_dir()?;
+    let path = dir.to_string_lossy();
+    let store = RealEnvStore::new()?;
+    if wanted::env::add_to_path(&path, &store)? {
+        println!("added {path} to PATH");
+    } else {
+        println!("{path} is already on PATH");
+    }
+    Ok(())
 }

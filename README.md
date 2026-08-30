@@ -222,6 +222,7 @@ is left out, and that platform simply falls through to the download attempt.
 | `wanted uninstall <name>`      | `un`  | Uninstall a tool and restore its environment           |
 | `wanted upgrade`               | —     | Upgrade `wanted` itself from the latest GitHub release (checksum-verified, rollback-safe swap) |
 | `wanted list`                  | `ls`  | List installed tools                                   |
+| `wanted env`                   | `use` | Add wanted's own directory to PATH so `wanted` is callable directly (registry on Windows; `~/.wanted/env.sh` on POSIX) |
 
 ## Layout
 

@@ -16,7 +16,7 @@ use crate::fs_path::DirName;
 /// use wanted::cli::spec::ToolSpec;
 ///
 /// let pinned = ToolSpec::from_str("go@1.22.5").unwrap();
-/// assert_eq!(pinned.name(), "go");
+/// assert_eq!(pinned.name().as_str(), "go");
 /// assert_eq!(pinned.version(), &Version::parse("1.22.5").unwrap());
 ///
 /// let latest = ToolSpec::from_str("go").unwrap();

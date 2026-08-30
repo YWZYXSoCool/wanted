@@ -1,19 +1,42 @@
 //! Persistent write-back backend for environment variables.
 
+use std::path::PathBuf;
+
 use crate::Result;
 use crate::env::EnvStore;
 use crate::error::Error;
 
-/// A real persistent backend based on the Windows user-level registry
-/// (`HKCU\Environment`).
-///
-/// M0 lands on Windows first; POSIX rc-file writing is left for later.
-pub struct RealEnvStore;
+/// A real persistent backend. On Windows it writes the user-level registry
+/// (`HKCU\Environment`); on POSIX it maintains an `export`-line script at
+/// `~/.wanted/env.sh` that the user sources once from their shell rc, so a fresh
+/// terminal picks up every later write automatically.
+pub struct RealEnvStore {
+    #[cfg_attr(windows, allow(dead_code))]
+    file: PathBuf,
+}
 
 impl RealEnvStore {
-    /// Construct the real backend.
-    pub fn new() -> Self {
-        Self
+    /// Construct the real backend for the current user.
+    #[cfg(windows)]
+    pub fn new() -> Result<Self> {
+        Ok(RealEnvStore {
+            file: PathBuf::new(),
+        })
+    }
+    /// Construct the real backend for the current user.
+    #[cfg(not(windows))]
+    pub fn new() -> Result<Self> {
+        let home = std::env::var("HOME")
+            .map_err(|_| Error::Other("cannot resolve $HOME for the env file".into()))?;
+        Ok(RealEnvStore::at(
+            PathBuf::from(home).join(".wanted").join("env.sh"),
+        ))
+    }
+
+    /// Construct a backend writing to an explicit file, for tests and tooling.
+    #[cfg(not(windows))]
+    pub fn at(file: PathBuf) -> Self {
+        RealEnvStore { file }
     }
 }
 
@@ -36,23 +59,128 @@ impl EnvStore for RealEnvStore {
     }
 
     #[cfg(not(windows))]
-    fn read(&self, _name: &crate::env::EnvVar) -> Result<Option<String>> {
-        Err(Error::Unsupported("persistent env write on POSIX"))
+    fn read(&self, name: &crate::env::EnvVar) -> Result<Option<String>> {
+        Ok(std::env::var(name.as_str()).ok())
     }
     #[cfg(not(windows))]
-    fn write(&self, _name: &crate::env::EnvVar, _value: &str) -> Result<()> {
-        Err(Error::Unsupported("persistent env write on POSIX"))
+    fn write(&self, name: &crate::env::EnvVar, value: &str) -> Result<()> {
+        let lines = match read_lines(&self.file)? {
+            Some(lines) => upsert(lines, name.as_str(), value),
+            None => vec![export_line(name.as_str(), value)],
+        };
+        write_lines_atomic(&self.file, &lines)
     }
     #[cfg(not(windows))]
-    fn remove(&self, _name: &crate::env::EnvVar) -> Result<()> {
-        Err(Error::Unsupported("persistent env write on POSIX"))
+    fn remove(&self, name: &crate::env::EnvVar) -> Result<()> {
+        let existing = match read_lines(&self.file)? {
+            None => return Ok(()),
+            Some(lines) => lines,
+        };
+        let kept: Vec<String> = existing
+            .into_iter()
+            .filter(|l| !is_var_line(l, name.as_str()))
+            .collect();
+        write_lines_atomic(&self.file, &kept)
     }
 }
 
 impl Default for RealEnvStore {
     fn default() -> Self {
-        Self::new()
+        match Self::new() {
+            Ok(store) => store,
+            Err(_) => Self {
+                file: PathBuf::from(".wanted").join("env.sh"),
+            },
+        }
     }
+}
+
+#[cfg(not(windows))]
+fn export_line(name: &str, value: &str) -> String {
+    format!("export {name}=\"{}\"", escape_value(value))
+}
+
+/// Replace every line declaring `name` with a single `export name="value"`,
+/// appending when none exists.
+#[cfg(not(windows))]
+fn upsert(lines: Vec<String>, name: &str, value: &str) -> Vec<String> {
+    let mut changed = false;
+    let mut out: Vec<String> = Vec::new();
+    for line in lines {
+        if is_var_line(&line, name) {
+            if changed {
+                continue;
+            }
+            out.push(export_line(name, value));
+            changed = true;
+        } else {
+            out.push(line);
+        }
+    }
+    if !changed {
+        out.push(export_line(name, value));
+    }
+    out
+}
+
+/// Whether a line is an `export <name>=...` declaration for the given name.
+#[cfg(not(windows))]
+fn is_var_line(line: &str, name: &str) -> bool {
+    line.strip_prefix("export ")
+        .and_then(|rest| rest.split('=').next())
+        == Some(name)
+}
+
+/// Shell-escape a value so it stays inside a single double-quoted string.
+#[cfg(not(windows))]
+fn escape_value(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Read the file's lines, or `None` when it does not exist.
+#[cfg(not(windows))]
+fn read_lines(path: &PathBuf) -> Result<Option<Vec<String>>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(Error::Io {
+                path: path.clone(),
+                source: err,
+            });
+        }
+    };
+    Ok(Some(text.lines().map(str::to_owned).collect()))
+}
+
+/// Write the script atomically (temp file + rename) so a reader never sees a
+/// partially-written file.
+#[cfg(not(windows))]
+fn write_lines_atomic(path: &PathBuf, lines: &[String]) -> Result<()> {
+    use std::io::Write;
+    let parent = path.parent().unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|e| Error::Io {
+        path: parent.to_path_buf(),
+        source: e,
+    })?;
+    let tmp = parent.join(format!(".env.sh.{}.tmp", std::process::id()));
+    let write = std::fs::File::create(&tmp).and_then(|mut f| {
+        for line in lines {
+            writeln!(f, "{line}")?;
+        }
+        Ok(())
+    });
+    if let Err(err) = write {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(Error::Io {
+            path: tmp,
+            source: err,
+        });
+    }
+    std::fs::rename(&tmp, path).map_err(|e| Error::Io {
+        path: path.clone(),
+        source: e,
+    })
 }
 
 #[cfg(windows)]
@@ -88,3 +216,6 @@ fn winreg_remove(name: &str) -> Result<()> {
     key.delete_value(name)
         .map_err(|e| Error::Other(format!("delete env {name}: {e}")))
 }
+
+#[cfg(all(test, not(windows)))]
+mod tests;

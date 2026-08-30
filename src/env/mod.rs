@@ -220,6 +220,22 @@ pub fn user_home() -> String {
         .unwrap_or_default()
 }
 
+/// Prepend `entry` to the PATH variable in `store`, writing only when it changes.
+///
+/// Returns `true` when `entry` was newly inserted, `false` when already present,
+/// so repeated calls are idempotent and never duplicate the entry.
+pub fn add_to_path(entry: &str, store: &dyn EnvStore) -> Result<bool> {
+    let name = EnvVar::from("PATH");
+    let old = store.read(&name)?.unwrap_or_default();
+    let next = PathValue::new(old.clone()).prepend(entry);
+    if next == old {
+        Ok(false)
+    } else {
+        store.write(&name, &next)?;
+        Ok(true)
+    }
+}
+
 /// Apply a group of deltas to the store, snapshotting old values and returning
 /// per-variable compensations.
 ///

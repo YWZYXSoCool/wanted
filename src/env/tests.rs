@@ -1,7 +1,7 @@
 //! Environment layer tests: delta merging, compensation replay, and tool lookup.
 
 use super::{
-    EnvDelta, EnvOp, EnvStore, EnvVar, MemEnvStore, PATH_SEP, PathValue, apply_deltas,
+    EnvDelta, EnvOp, EnvStore, EnvVar, MemEnvStore, PATH_SEP, PathValue, add_to_path, apply_deltas,
     reverse_value, undo_delta,
 };
 
@@ -173,4 +173,34 @@ fn env_var_equality_follows_platform() {
     assert_eq!(goroot, EnvVar::from("GOROOT"));
     #[cfg(windows)]
     assert_eq!(goroot, EnvVar::from("goroot"));
+}
+
+#[test]
+fn add_to_path_prepends_entry() {
+    let store = MemEnvStore::new();
+    let path = EnvVar::from("PATH");
+    store.write(&path, "/old/bin").unwrap();
+    assert!(add_to_path("/apps/wanted", &store).unwrap());
+    assert_eq!(
+        store.read(&path).unwrap().unwrap(),
+        joined(&["/apps/wanted", "/old/bin"])
+    );
+}
+
+#[test]
+fn add_to_path_is_idempotent() {
+    let store = MemEnvStore::new();
+    let path = EnvVar::from("PATH");
+    store.write(&path, "/apps/wanted/bin").unwrap();
+    assert!(!add_to_path("/apps/wanted/bin", &store).unwrap());
+    assert_eq!(store.read(&path).unwrap().unwrap(), "/apps/wanted/bin");
+}
+
+#[test]
+fn add_to_path_on_empty_path() {
+    let store = MemEnvStore::new();
+    let path = EnvVar::from("PATH");
+    store.remove(&path).unwrap();
+    assert!(add_to_path("/apps/wanted", &store).unwrap());
+    assert_eq!(store.read(&path).unwrap().unwrap(), "/apps/wanted");
 }

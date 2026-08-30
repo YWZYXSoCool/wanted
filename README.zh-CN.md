@@ -176,6 +176,7 @@ apt、brew 这类装到系统位置的管理器就不写进去，这类平台会
 | `wanted uninstall <name>`      | `un` | 卸载工具并还原其环境变量                             |
 | `wanted upgrade`               | —    | 从最新 GitHub release 升级 `wanted` 自身（校验和验证 + 可回滚的热替换） |
 | `wanted list`                  | `ls` | 列出已安装的工具                                    |
+| `wanted env`                   | `use` | 把 wanted 所在目录加入 PATH，使 `wanted` 可直接调用（Windows 写注册表；POSIX 写 `~/.wanted/env.sh`） |
 
 ## 目录布局
 
