@@ -12,6 +12,17 @@
       },
       "default": {}
     },
+    "env_by_platform": {
+      "description": "Per-platform overrides of the `env` values above, keyed by platform\ntriplet. A matching entry redefines a variable on that platform only;\nvariables without a platform entry keep their global `env` value.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "default": {}
+    },
     "install": {
       "description": "Install section.",
       "$ref": "#/$defs/RawInstall"

@@ -76,6 +76,11 @@ pub struct RawManifest {
     /// Environment variables to configure (name -> template).
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Per-platform overrides of the `env` values above, keyed by platform
+    /// triplet. A matching entry redefines a variable on that platform only;
+    /// variables without a platform entry keep their global `env` value.
+    #[serde(default)]
+    pub env_by_platform: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 /// Manifest metadata.

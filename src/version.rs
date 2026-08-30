@@ -10,7 +10,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// A typed wrapper keeps `{version}` templating, receipts, and uninstall display
 /// from treating a bare string as arbitrary text: a pinned value must be well-formed
 /// SemVer, and the `latest` case is explicit rather than a magic string.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum Version {
     /// No version requested; `{version}` resolves to the literal `latest`.
     Latest,
@@ -22,10 +22,9 @@ impl Version {
     /// Parse a version string, treating `latest` as the unpinned case.
     pub fn parse(source: &str) -> Result<Self, semver::Error> {
         if source == "latest" {
-            Ok(Version::Latest)
-        } else {
-            Ok(Version::Pinned(source.parse()?))
+            return Ok(Version::Latest);
         }
+        Ok(Version::Pinned(source.parse()?))
     }
 }
 
