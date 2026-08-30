@@ -5,6 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use super::RealEnvStore;
+use crate::env::EnvStore;
 use crate::env::EnvVar;
 use tempfile::NamedTempFile;
 
