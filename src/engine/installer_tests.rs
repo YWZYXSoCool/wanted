@@ -1,5 +1,5 @@
 //! Installer-method tests: downloading an executable and running it silently into
-//! `apps/<base_dir>`, with the method/args selected per-platform via `install.strategy`.
+//! `<base_dir>`, with the method/args selected per-platform via `install.strategy`.
 
 use std::path::Path;
 
@@ -101,7 +101,7 @@ fn plan_selects_installer_strategy_on_windows() {
     let Op::RunInstaller { exe, args, base } = &plan.staged_ops[1] else {
         panic!("windows plan should run the installer");
     };
-    let expected_base = Path::new("/root").join(".wanted").join("apps").join("gcc");
+    let expected_base = Path::new("/root").join("gcc");
     assert_eq!(base, &expected_base);
     assert_eq!(plan.dest_dir, expected_base);
     assert_eq!(plan.app_dir, expected_base);
@@ -146,7 +146,7 @@ fn execute_installer_keeps_dest_and_persists_env() {
 
     assert!(fs.exists(&plan.dest_dir).unwrap());
     assert!(!fs.exists(&staging_dir).unwrap());
-    let expected_path = root.join(".wanted").join("apps").join("gcc").join("bin");
+    let expected_path = root.join("gcc").join("bin");
     assert_eq!(
         env.read(&EnvVar::from("PATH")).unwrap().unwrap(),
         expected_path.to_string_lossy()

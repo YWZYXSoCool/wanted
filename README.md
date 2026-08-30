@@ -54,6 +54,12 @@ wanted add golang.toml
 # install a tool (optionally pinned to a version)
 wanted install go@go1.27.0
 
+# list the versions a plugin's sources declare (latest is marked)
+wanted versions go
+
+# a bare name resolves `latest` to the newest declared version (see below)
+wanted install go
+
 # pick a named asset source at install time (defaults to the plugin's `default` source)
 wanted install go --asset-source go.dev
 
@@ -67,8 +73,8 @@ wanted list
 wanted uninstall go
 ```
 
-The first install creates a `.wanted/` directory in the current directory holding
-installed apps and receipts.
+The first install installs the app into the current directory and creates a
+`.wanted/` record directory next to it holding install receipts.
 
 ## Plugin manifest
 
@@ -94,6 +100,10 @@ base_dir = "golang"        # directory inside/at which the app lives
   go.dev  = "https://go.dev/dl/go{version}.darwin-arm64.tar.gz",
 }
 
+[install.versions]                # available versions per source (optional)
+default = ["1.22.5", "1.23.4"]    # list real versions, not prefixed ones
+"go.dev" = ["1.22.5", "1.23.4"]
+
 [env]
 PATH   = "bin"          # prepended to PATH
 GOROOT = "."
@@ -105,11 +115,23 @@ GOBIN  = "$GOPATH/bin"
 named sources. `{version}` is substituted with the version you ask to install;
 the `--asset-source <name>` flag selects the source (default: `default`).
 
+**Versions.** Inside `install`, the optional `[install.versions]` table lists the
+available versions per source name (`default` and the others used in `asset`).
+Installing a bare `wanted install <tool>` (no `@version`) resolves `latest` to
+the **newest** version the selected source declares — the real version is
+substituted into `{version}`, not the literal string `latest`. `wanted versions
+<tool>` prints these lists (`--source <name>` to show one), marking the newest
+as `latest`. Entries must be canonical, comparable SemVer (e.g. `1.23.4`, with
+any prefix like `go` written into the URL template as `go{version}`); a
+non-comparable entry errors rather than silently picking the wrong version. A
+source without a `versions` entry keeps the old behaviour: `latest` is
+substituted literally (advanced users who manage their own URL magic).
+
 **Components** declare optional add-ons with the exact same platform → source →
 URL shape as assets. They are never downloaded by default; pass the repeatable
 `--with <name>` flag to fetch one and unpack it under the base asset's directory
 (`apps/<base_dir>/<name>`), separate from the core. Env entries address them with
-`../<name>/...`-style relative paths (resolved from `apps/<base_dir>`).
+`../<name>/...`-style relative paths (resolved from `<base_dir>`).
 
 **Env** entries expand `{version}`, `{user}` (home directory) and `$VAR`
 references to variables defined earlier in the list. Relative paths resolve
@@ -118,9 +140,9 @@ against the install directory. `PATH` is prepended by default, or appended via
 
 **Install method.** `method = "download"` (default) unpacks a vendored archive.
 `method = "installer"` instead downloads an executable and runs it as a silent
-installer into `apps/<base_dir>`, for tools shipped as `.exe` (e.g. LLVM on
+installer into `<base_dir>`, for tools shipped as `.exe` (e.g. LLVM on
 Windows). The silent flags live in `args` and may reference `{base}` (the
-`apps/<base_dir>` directory), `{version}` and `{user}`:
+`<base_dir>` directory), `{version}` and `{user}`:
 
 ```toml
 [install]
@@ -151,7 +173,7 @@ Some tools aren't distributed as archives or installers at all — they are pull
 in by a package manager (`cargo install`, `npm i -g`, `pip install`, …). Use
 `method = "command"` to run one or more external commands in **fallback order**:
 if a tool is missing from `PATH`, or a command exits non-zero, the next command is
-tried. Each command writes into `apps/<base_dir>` (point it there via a flag like
+tried. Each command writes into `<base_dir>` (point it there via a flag like
 `--root {base}` / `--prefix {base}`, or an env var like `CARGO_INSTALL_ROOT`).
 `install.command` is keyed by platform triple, mirroring `asset`:
 
@@ -168,9 +190,9 @@ base_dir = "rust"
 ```
 
 `tool` is the executable name (resolved via `PATH`). `args` and the values of the
-per-command `env` map expand `{base}` (the `apps/<base_dir>` directory),
+per-command `env` map expand `{base}` (the `<base_dir>` directory),
 `{version}` and `{user}`. When every command fails, the install reports the
-combined errors and aborts — a previous good install in `apps/<base_dir>` is
+combined errors and aborts — a previous good install in `<base_dir>` is
 never deleted. This method supports no components and needs no `asset`.
 
 **Fallback chain.** A `method` picks one mechanism. To try several in order —
@@ -217,7 +239,8 @@ is left out, and that platform simply falls through to the download attempt.
 | Command                        | Alias | Description                                            |
 | ------------------------------ | ----- | ------------------------------------------------------ |
 | `wanted add <name\|plugin.toml>` | `a`   | Register a plugin manifest (a tool name fetches `<name>.toml` from the default registry; `--registry <base>` overrides it), making a tool installable |
-| `wanted install <spec>...`     | `i`   | Install tools (`name@version`); `--source`, `--asset-source`, `--with <component>` |
+| `wanted install <spec>...`     | `i`   | Install tools (`name@version`); bare `name` resolves `latest` to the newest declared version; `--source`, `--asset-source`, `--with <component>` |
+| `wanted versions <name>`       | `avail` | List the versions a plugin's sources declare (marking `latest`); `--source <name>` shows one source |
 | `wanted remove <name>`         | `rm`  | Remove a registered plugin manifest                    |
 | `wanted uninstall <name>`      | `un`  | Uninstall a tool and restore its environment           |
 | `wanted upgrade`               | —     | Upgrade `wanted` itself from the latest GitHub release (checksum-verified, rollback-safe swap) |
@@ -227,10 +250,11 @@ is left out, and that platform simply falls through to the download attempt.
 ## Layout
 
 ```
-<project>/
-└── .wanted/                 # created at first install in the current directory
-    ├── apps/<base_dir>/     # installed applications
-    └── installed/<name>/    # per-tool install receipts (env snapshots)
+<project>/                   # the directory where `wanted install` runs
+├── <base_dir>/              # installed applications (directly in the run directory)
+└── .wanted/                 # record directory, created at first install
+    ├── installed/<name>/    # per-tool install receipts (env snapshots)
+    └── .staging/            # transient downloads/extraction (cleaned up)
 ```
 
 ## Status

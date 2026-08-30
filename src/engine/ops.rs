@@ -27,7 +27,7 @@ pub enum Op {
         exe: PathBuf,
         /// Silent-install arguments (placeholders already expanded).
         args: Vec<String>,
-        /// The target install directory under `apps`.
+        /// The target install directory in the run directory.
         base: PathBuf,
     },
     /// Apply the deltas to the environment backend.
@@ -36,7 +36,7 @@ pub enum Op {
     RunCommand {
         /// Fully-expanded command lines, tried in order until one succeeds.
         commands: Vec<CommandInvocation>,
-        /// The target install directory under `apps` this run promises to fill.
+        /// The target install directory this run promises to fill.
         base: PathBuf,
     },
 }
@@ -46,10 +46,13 @@ impl Op {
     pub fn apply(&self, ctx: &Ctx) -> Result<Compensation> {
         match self {
             Op::Download { url, to } => {
-                let bytes = ctx.downloader.fetch(url, &mut |done, total| {
-                    ctx.reporter.report(Progress::Bytes { done, total });
-                })?;
-                ctx.fs.write(to, &bytes)?;
+                ctx.reporter.report(Progress::DownloadSource {
+                    url: url.as_str().to_string(),
+                });
+                ctx.downloader
+                    .fetch_to(ctx.fs, url, to, &mut |done, total| {
+                        ctx.reporter.report(Progress::Bytes { done, total });
+                    })?;
                 Ok(Compensation::RemoveFile(to.clone()))
             }
             Op::Unpack { from, to } => {
@@ -78,13 +81,15 @@ impl Op {
         }
     }
 
-    pub fn label(&self) -> &'static str {
+    /// The static phase label for this op; `None` for ops that self-report a richer
+    /// start event (download reports [`Progress::DownloadSource`] itself).
+    pub fn label(&self) -> Option<&'static str> {
         match self {
-            Op::Download { .. } => "Downloading",
-            Op::Unpack { .. } => "Extracting",
-            Op::RunInstaller { .. } => "Installing",
-            Op::RunCommand { .. } => "Installing",
-            Op::WriteEnv { .. } => "Configuring env",
+            Op::Download { .. } => None,
+            Op::Unpack { .. } => Some("Extracting"),
+            Op::RunInstaller { .. } => Some("Installing"),
+            Op::RunCommand { .. } => Some("Installing"),
+            Op::WriteEnv { .. } => Some("Configuring env"),
         }
     }
 }
@@ -129,16 +134,10 @@ pub struct CommandInvocation {
 
 impl CommandInvocation {
     /// Build a fully-expanded invocation from a raw command, substituting
-    /// `{base}` (the install dir under `apps`), `{version}`, and `{user}`.
+    /// `{base}` (the install directory), `{version}`, and `{user}`.
     pub fn from_raw(raw: &RawCommand, base: &Path, version: &Version) -> CommandInvocation {
-        let base_str = base.to_string_lossy();
-        let user_home = crate::env::user_home();
-        let expand = |template: &str| {
-            template
-                .replace("{base}", &base_str)
-                .replace("{version}", &version.to_string())
-                .replace("{user}", &user_home)
-        };
+        let expand =
+            |template: &str| crate::engine::expand::expand_template(template, base, version);
         CommandInvocation {
             tool: raw.tool.clone().into(),
             args: raw.args.iter().map(|arg| expand(arg)).collect(),
@@ -163,9 +162,18 @@ impl CommandInvocation {
     pub fn try_fallback(commands: &[CommandInvocation], ctx: &Ctx) -> Result<()> {
         let mut failures = Vec::new();
         for invocation in commands {
+            let tool = invocation.tool.to_string();
+            ctx.reporter
+                .report(Progress::RunningCommand { tool: tool.clone() });
             match invocation.run(ctx) {
                 Ok(()) => return Ok(()),
-                Err(error) => failures.push(format!("{}: {error}", invocation.tool)),
+                Err(error) => {
+                    ctx.reporter.report(Progress::CommandFailed {
+                        tool: tool.clone(),
+                        error: error.to_string(),
+                    });
+                    failures.push(format!("{tool}: {error}"));
+                }
             }
         }
         Err(crate::Error::Process(format!(

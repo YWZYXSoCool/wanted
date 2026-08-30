@@ -44,7 +44,7 @@ pub struct Receipt {
     pub name: String,
     /// Installed version.
     pub version: Version,
-    /// The installed tool root (under `apps`), removed wholesale on uninstall.
+    /// The installed tool root in the run directory, removed wholesale on uninstall.
     pub app_dir: AppDir,
     /// Environment variables written by the install, with their old values.
     pub vars: Vec<VarSnapshot>,

@@ -61,7 +61,7 @@
           "const": "download"
         },
         {
-          "description": "Run the downloaded asset as a silent installer, targeting `apps/<base_dir>`.",
+          "description": "Run the downloaded asset as a silent installer, targeting `<base_dir>` in the run directory.",
           "type": "string",
           "const": "installer"
         },
@@ -130,7 +130,7 @@
           "default": {}
         },
         "base_dir": {
-          "description": "Placement path relative to `apps`.",
+          "description": "Placement directory in the run directory.",
           "type": "string"
         },
         "command": {
@@ -185,6 +185,24 @@
           "additionalProperties": {
             "$ref": "#/$defs/RawStrategy"
           }
+        },
+        "versions": {
+          "description": "Available versions per asset source (source name -> version strings,\nin any order). `latest` resolves to the newest entry when installing.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "default": {}
+        },
+        "versions_source": {
+          "description": "Remote version endpoints per asset source. When a source has no inline\n`versions`, `latest` / `versions` fetch the endpoint on demand and\nextract the version strings.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/VersionsSource"
+          }
         }
       },
       "required": [
@@ -225,7 +243,7 @@
       "type": "object",
       "properties": {
         "args": {
-          "description": "Silent-install arguments, with `{base}` = install dir under `apps`.",
+          "description": "Silent-install arguments, with `{base}` = the install directory.",
           "type": "array",
           "default": [],
           "items": {
@@ -239,6 +257,40 @@
       },
       "required": [
         "method"
+      ]
+    },
+    "VersionsSource": {
+      "description": "A remote version endpoint and its extraction rules. When a source declares\nno inline `versions`, `latest` / `versions` fetch this URL and pull the\nversion strings out of the returned JSON.",
+      "type": "object",
+      "properties": {
+        "field": {
+          "description": "Object field to read from each array element as the version string.\n`Some(f)`: the top level must be an array, `element[f]` is the version.\n`None`: a top-level object uses its keys as versions (PyPI shape); a\ntop-level array expects each element to be a bare version string.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "stable_only": {
+          "description": "Drop versions carrying a SemVer pre-release segment (rc / beta / alpha).\nDefaults to false.",
+          "type": "boolean",
+          "default": false
+        },
+        "strip": {
+          "description": "Literal prefix stripped from the head of each version (e.g. \"go\", \"v\",\n\"llvmorg-\"). No stripping when absent.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "url": {
+          "description": "URL whose GET response is JSON (fetched in full).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
       ]
     }
   }

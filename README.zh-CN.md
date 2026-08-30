@@ -39,6 +39,12 @@ wanted add golang.toml
 # 安装一个工具（可固定版本）
 wanted install go@go1.27.0
 
+# 列出插件各来源声明的可用版本（会标注 latest）
+wanted versions go
+
+# 裸名字安装时，latest 解析为声明的最新版本（见下）
+wanted install go
+
 # 安装时指定命名的资产来源（默认取插件的 `default` 来源）
 wanted install go --asset-source go.dev
 
@@ -52,7 +58,7 @@ wanted list
 wanted uninstall go
 ```
 
-首次安装会在当前目录创建 `.wanted/` 目录，存放已装应用与收据。
+首次安装会把应用安装到当前目录，并在旁边创建 `.wanted/` 记录目录存放安装收据。
 
 ## 插件清单
 
@@ -66,7 +72,7 @@ url = "https://golang.org" # 主页
 
 [install]
 method = "download"        # download / installer / command —— system 尚未接入
-base_dir = "golang"        # 应用所在的目录（位于 apps/ 之下）
+base_dir = "golang"        # 应用所在的目录（位于运行目录之下）
 
 [install.asset]
 "x86_64-pc-windows-msvc" = {
@@ -78,6 +84,10 @@ base_dir = "golang"        # 应用所在的目录（位于 apps/ 之下）
   go.dev  = "https://go.dev/dl/go{version}.darwin-arm64.tar.gz",
 }
 
+[install.versions]                # 每个来源的可选版本列表
+default = ["1.22.5", "1.23.4"]    # 列出真实版本号，不要带前缀
+"go.dev" = ["1.22.5", "1.23.4"]
+
 [env]
 PATH   = "bin"          # 前置到 PATH
 GOROOT = "."
@@ -87,11 +97,13 @@ GOBIN  = "$GOPATH/bin"
 
 **资产（asset）** 将平台三元组（`<arch>-<vendor>-<os>` 风格）映射到一个或多个命名来源。`{version}` 会被替换为你要求安装的版本；`--asset-source <name>` 选择来源（默认 `default`）。
 
-**组件（component）** 以与资产完全相同的「平台 → 来源 → URL」结构声明可选附加项。默认不会下载；传入可重复的 `--with <name>` 标志才抓取，并解压到基础资产目录之下（`apps/<base_dir>/<name>`），与核心隔离。环境变量条目可用 `../<name>/...` 形式的相对路径（相对 `apps/<base_dir>` 解析）指向组件目录。
+**版本（versions）**。`install` 内可选的 `[install.versions]` 表按来源名（`default` 以及 `asset` 里用到的其它来源）列出可用版本。裸的 `wanted install <tool>`（不带 `@version`）会把 `latest` 解析为所选来源声明的**最新**版本——用真实版本号替换 `{version}`，而不是字面量 `latest`。`wanted versions <tool>` 打印这些列表（`--source <name>` 只显示某来源），并把最新版标注为 `latest`。每个条目必须是可比较的规范 semver（如 `1.23.4`；`go` 这类前缀请写进 URL 模板 `go{version}`）；出现不可比较的条目会报错，而不是静默选错版本。未声明 `versions` 的来源保持旧行为：`latest` 仍被字面替换（适合自己处理 URL 魔力的高级用户）。
+
+**组件（component）** 以与资产完全相同的「平台 → 来源 → URL」结构声明可选附加项。默认不会下载；传入可重复的 `--with <name>` 标志才抓取，并解压到基础资产目录之下（`apps/<base_dir>/<name>`），与核心隔离。环境变量条目可用 `../<name>/...` 形式的相对路径（相对 `<base_dir>` 解析）指向组件目录。
 
 **环境变量（env）** 条目会展开 `{version}`、`{user}`（家目录）以及对先前定义过变量的 `$VAR` 引用。相对路径相对安装目录解析。`PATH` 默认前置追加，或通过 `install.env_box` 改为后置。
 
-**安装方式（method）**：`method = "download"`（默认）直接解压归档；`method = "installer"` 则下载可执行文件并作为**静默安装器**运行、装到 `apps/<base_dir>`，适用于以 `.exe` 发行的工具（如 Windows 上的 LLVM）。静默参数放在 `args` 中，可用 `{base}`（即 `apps/<base_dir>` 目录）、`{version}`、`{user}` 占位：
+**安装方式（method）**：`method = "download"`（默认）直接解压归档；`method = "installer"` 则下载可执行文件并作为**静默安装器**运行、装到 `<base_dir>`，适用于以 `.exe` 发行的工具（如 Windows 上的 LLVM）。静默参数放在 `args` 中，可用 `{base}`（即 `<base_dir>` 目录）、`{version}`、`{user}` 占位：
 
 ```toml
 [install]
@@ -116,7 +128,7 @@ asset = {
 "x86_64-pc-windows-msvc" = { method = "installer", args = ["/VERYSILENT", "/DIR={base}"] }
 ```
 
-有些工具不以归档或安装器分发，而是由包管理器拉取（`cargo install`、`npm i -g`、`pip install`…）。用 `method = "command"` 按**回退顺序**运行一条或多条外部命令：某个工具不在 `PATH`、或命令返回非零退出码时，就尝试下一条命令。每条命令写入 `apps/<base_dir>`（用 `--root {base}` / `--prefix {base}` 这类参数，或 `CARGO_INSTALL_ROOT` 这类环境变量引导到该目录）。`install.command` 与 `asset` 一样按平台三元组键控：
+有些工具不以归档或安装器分发，而是由包管理器拉取（`cargo install`、`npm i -g`、`pip install`…）。用 `method = "command"` 按**回退顺序**运行一条或多条外部命令：某个工具不在 `PATH`、或命令返回非零退出码时，就尝试下一条命令。每条命令写入 `<base_dir>`（用 `--root {base}` / `--prefix {base}` 这类参数，或 `CARGO_INSTALL_ROOT` 这类环境变量引导到该目录）。`install.command` 与 `asset` 一样按平台三元组键控：
 
 ```toml
 [install]
@@ -130,7 +142,7 @@ base_dir = "rust"
 ]
 ```
 
-`tool` 是可执行文件名（经 `PATH` 解析）。`args` 与每条命令的 `env` 映射的值会展开 `{base}`（即 `apps/<base_dir>` 目录）、`{version}`、`{user}` 占位。当所有命令都失败时，安装会汇总各错误并中止——**不会删除** `apps/<base_dir>` 中上一份安装。此方式不支持组件，也不需要 `asset`。
+`tool` 是可执行文件名（经 `PATH` 解析）。`args` 与每条命令的 `env` 映射的值会展开 `{base}`（即 `<base_dir>` 目录）、`{version}`、`{user}` 占位。当所有命令都失败时，安装会汇总各错误并中止——**不会删除** `<base_dir>` 中上一份安装。此方式不支持组件，也不需要 `asset`。
 
 **回退链（Fallback chain）**。`method` 只选一种机制。若想按顺序多试几种——先
 试系统包管理器，最后才回退到链接下载——就在 `install.fallback` 里声明额外
@@ -171,7 +183,8 @@ apt、brew 这类装到系统位置的管理器就不写进去，这类平台会
 | 命令                           | 别名 | 说明                                              |
 | ------------------------------ | ---- | ------------------------------------------------- |
 | `wanted add <name\|plugin.toml>` | `a`  | 注册插件清单并使其可安装（传工具名会从默认仓库抓取 `<name>.toml`，可用 `--registry <base>` 覆盖） |
-| `wanted install <spec>...`     | `i`  | 安装工具（`name@version`）；支持 `--source`、`--asset-source`、`--with <component>` |
+| `wanted install <spec>...`     | `i`  | 安装工具（`name@version`）；裸 `name` 把 `latest` 解析为声明的最新版本；支持 `--source`、`--asset-source`、`--with <component>` |
+| `wanted versions <name>`       | `avail` | 列出插件各来源声明的可用版本（标注 `latest`）；`--source <name>` 只显示某来源 |
 | `wanted remove <name>`         | `rm` | 移除已注册的插件清单                                |
 | `wanted uninstall <name>`      | `un` | 卸载工具并还原其环境变量                             |
 | `wanted upgrade`               | —    | 从最新 GitHub release 升级 `wanted` 自身（校验和验证 + 可回滚的热替换） |
@@ -181,10 +194,11 @@ apt、brew 这类装到系统位置的管理器就不写进去，这类平台会
 ## 目录布局
 
 ```
-<project>/
-└── .wanted/                 # 首次安装时在当前目录创建
-    ├── apps/<base_dir>/     # 已安装应用
-    └── installed/<name>/    # 各工具的安装收据（环境变量快照）
+<project>/                   # 运行 `wanted install` 的目录
+├── <base_dir>/              # 已安装应用（直接位于运行目录下）
+└── .wanted/                 # 记录目录，首次安装时创建
+    ├── installed/<name>/    # 各工具的安装收据（环境变量快照）
+    └── .staging/            # 临时下载/解压区（安装后被清理）
 ```
 
 ## 状态

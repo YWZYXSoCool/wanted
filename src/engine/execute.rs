@@ -77,10 +77,20 @@ pub fn execute(plan: &Plan, ctx: &Ctx) -> Result<()> {
 /// attempt fails, the panics-free error aggregates them.
 pub fn execute_chain(plans: &[Plan], ctx: &Ctx) -> Result<usize> {
     let mut failures = Vec::new();
+    let total = plans.len();
     for (index, plan) in plans.iter().enumerate() {
+        ctx.reporter.report(Progress::TryingMethod {
+            index: index + 1,
+            total,
+        });
         match execute(plan, ctx) {
             Ok(()) => return Ok(index),
-            Err(error) => failures.push(format!("{} attempt {}: {error}", plan.name, index + 1)),
+            Err(error) => {
+                ctx.reporter.report(Progress::MethodFailed {
+                    error: error.to_string(),
+                });
+                failures.push(format!("{} attempt {}: {error}", plan.name, index + 1));
+            }
         }
     }
     Err(Error::Other(format!(
@@ -91,7 +101,9 @@ pub fn execute_chain(plans: &[Plan], ctx: &Ctx) -> Result<usize> {
 
 fn run_phases(plan: &Plan, ctx: &Ctx, log: &mut UndoLog) -> Result<()> {
     for op in &plan.staged_ops {
-        ctx.reporter.report(Progress::Phase(op.label()));
+        if let Some(label) = op.label() {
+            ctx.reporter.report(Progress::Phase(label));
+        }
         log.push(op.apply(ctx)?);
     }
 
@@ -105,7 +117,9 @@ fn run_phases(plan: &Plan, ctx: &Ctx, log: &mut UndoLog) -> Result<()> {
     }
 
     for op in &plan.commit_ops {
-        ctx.reporter.report(Progress::Phase(op.label()));
+        if let Some(label) = op.label() {
+            ctx.reporter.report(Progress::Phase(label));
+        }
         log.push(op.apply(ctx)?);
     }
 

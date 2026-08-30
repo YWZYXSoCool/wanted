@@ -7,15 +7,18 @@ pub mod target;
 
 pub mod raw;
 
+pub mod versions;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::Result;
+use crate::Version;
 use crate::error::Error;
 use crate::fs_path::DirName;
 
 use raw::RawManifest;
-pub use raw::{AssetMap, EnvBox, InstallMethod, RawCommand, RawStrategy};
+pub use raw::{AssetMap, EnvBox, InstallMethod, RawCommand, RawStrategy, VersionsSource};
 
 pub use target::Target;
 
@@ -42,7 +45,7 @@ pub struct Install {
     pub assets: AssetMap,
     /// Optional components (platform-keyed like `assets`), downloaded only when enabled.
     pub components: BTreeMap<String, AssetMap>,
-    /// Placement path relative to `apps` (used as a directory segment).
+    /// Placement directory in the run directory (used as a directory segment).
     pub base_dir: DirName,
     /// The PATH box.
     pub env_box: EnvBox,
@@ -56,6 +59,12 @@ pub struct Install {
     /// Fallback install methods, tried in order after the primary `method`
     /// fails; each reuses this section's already-declared data.
     pub fallback: Vec<InstallMethod>,
+    /// Available versions per asset source (source name -> version strings,
+    /// in any order). `latest` resolves to the newest entry when installing.
+    pub versions: BTreeMap<String, Vec<String>>,
+    /// Remote version endpoints per asset source, fetched on demand when a
+    /// source declares no inline `versions`.
+    pub versions_source: BTreeMap<String, VersionsSource>,
 }
 
 /// A validated plugin manifest.
@@ -131,6 +140,8 @@ impl Manifest {
                 strategy: raw.install.strategy,
                 commands: raw.install.command,
                 fallback: raw.install.fallback,
+                versions: raw.install.versions,
+                versions_source: raw.install.versions_source,
             },
             env: raw.env,
             env_by_platform: raw.env_by_platform,
@@ -146,6 +157,28 @@ impl Install {
             return (&self.method, &self.args);
         };
         (&entry.method, &entry.args)
+    }
+
+    /// Declared versions for a source (`None` picks `default`), if any.
+    pub fn versions_for(&self, source: Option<&str>) -> Option<&Vec<String>> {
+        let name = source.unwrap_or(DEFAULT_SOURCE);
+        self.versions.get(name)
+    }
+
+    /// Resolve `Version::Latest` to the newest declared version for `source`.
+    ///
+    /// `None` when the source declares no versions (the caller keeps `Latest`,
+    /// whose `{version}` resolves to the literal `latest`); `Some(Err)` when the
+    /// declared versions fail to resolve.
+    pub fn latest_for(&self, source: Option<&str>) -> Option<Result<Version>> {
+        let list = self.versions_for(source)?;
+        Some(crate::version::pick_latest(list))
+    }
+
+    /// The remote version endpoint for a source (`None` picks `default`).
+    pub fn versions_source_for(&self, source: Option<&str>) -> Option<&VersionsSource> {
+        let name = source.unwrap_or(DEFAULT_SOURCE);
+        self.versions_source.get(name)
     }
 }
 

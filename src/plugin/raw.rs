@@ -20,7 +20,7 @@ use serde::Deserialize;
 pub enum InstallMethod {
     /// Extract the vendor-distributed archive directly.
     Download,
-    /// Run the downloaded asset as a silent installer, targeting `apps/<base_dir>`.
+    /// Run the downloaded asset as a silent installer, targeting `<base_dir>` in the run directory.
     Installer,
     /// Delegate to a system package manager (`winget` / `brew`); not wired in M0.
     System,
@@ -34,7 +34,7 @@ pub enum InstallMethod {
 pub struct RawStrategy {
     /// Install method for this platform.
     pub method: InstallMethod,
-    /// Silent-install arguments, with `{base}` = install dir under `apps`.
+    /// Silent-install arguments, with `{base}` = the install directory.
     #[serde(default)]
     pub args: Vec<String>,
 }
@@ -61,6 +61,29 @@ pub enum EnvBox {
     Prepend,
     /// Append.
     Append,
+}
+
+/// A remote version endpoint and its extraction rules. When a source declares
+/// no inline `versions`, `latest` / `versions` fetch this URL and pull the
+/// version strings out of the returned JSON.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+pub struct VersionsSource {
+    /// URL whose GET response is JSON (fetched in full).
+    pub url: String,
+    /// Object field to read from each array element as the version string.
+    /// `Some(f)`: the top level must be an array, `element[f]` is the version.
+    /// `None`: a top-level object uses its keys as versions (PyPI shape); a
+    /// top-level array expects each element to be a bare version string.
+    #[serde(default)]
+    pub field: Option<String>,
+    /// Literal prefix stripped from the head of each version (e.g. "go", "v",
+    /// "llvmorg-"). No stripping when absent.
+    #[serde(default)]
+    pub strip: Option<String>,
+    /// Drop versions carrying a SemVer pre-release segment (rc / beta / alpha).
+    /// Defaults to false.
+    #[serde(default)]
+    pub stable_only: bool,
 }
 
 /// Asset map shape: platform triplet -> source name -> URL template (with `{version}`).
@@ -106,7 +129,7 @@ pub struct RawInstall {
     /// Optional components (platform-keyed like `asset`), downloaded only when enabled.
     #[serde(default)]
     pub component: BTreeMap<String, AssetMap>,
-    /// Placement path relative to `apps`.
+    /// Placement directory in the run directory.
     pub base_dir: String,
     /// The PATH box.
     #[serde(default)]
@@ -126,4 +149,13 @@ pub struct RawInstall {
     /// (`asset`, `command`, `args`).
     #[serde(default)]
     pub fallback: Vec<InstallMethod>,
+    /// Available versions per asset source (source name -> version strings,
+    /// in any order). `latest` resolves to the newest entry when installing.
+    #[serde(default)]
+    pub versions: BTreeMap<String, Vec<String>>,
+    /// Remote version endpoints per asset source. When a source has no inline
+    /// `versions`, `latest` / `versions` fetch the endpoint on demand and
+    /// extract the version strings.
+    #[serde(default)]
+    pub versions_source: BTreeMap<String, VersionsSource>,
 }

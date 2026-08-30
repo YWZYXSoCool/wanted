@@ -1,5 +1,5 @@
 //! Command-method tests: running external package-manager commands in fallback
-//! order into `apps/<base_dir>`, treating a missing tool or a failing command
+//! order into `<base_dir>`, treating a missing tool or a failing command
 //! alike (both fall through to the next candidate).
 
 use std::cell::RefCell;
@@ -42,12 +42,7 @@ fn target() -> Target {
 
 /// The app's PATH segment declared by `[env]`.
 fn expected_path(root: &Path) -> String {
-    root.join(".wanted")
-        .join("apps")
-        .join("bat")
-        .join("bin")
-        .to_string_lossy()
-        .into_owned()
+    root.join("bat").join("bin").to_string_lossy().into_owned()
 }
 
 fn vsn() -> Version {
@@ -151,6 +146,18 @@ impl Reporter for RecordingReporter {
         if let Progress::Phase(label) = event {
             self.phases.borrow_mut().push(label);
         }
+    }
+}
+
+/// A reporter that records every progress event verbatim, for decision-trail tests.
+#[derive(Default)]
+struct EventReporter {
+    events: RefCell<Vec<Progress>>,
+}
+
+impl Reporter for EventReporter {
+    fn report(&self, event: Progress) {
+        self.events.borrow_mut().push(event);
     }
 }
 
@@ -399,7 +406,7 @@ fn execute_chain_falls_back_to_download_when_command_fails() {
 
     assert_eq!(index, 1);
     assert!(fs.exists(&plans[1].dest_dir).unwrap());
-    let expected = root.join(".wanted").join("apps").join("golang").join("bin");
+    let expected = root.join("golang").join("bin");
     assert_eq!(
         env.read(&EnvVar::from("PATH")).unwrap().unwrap(),
         expected.to_string_lossy()
@@ -428,4 +435,66 @@ fn execute_chain_errors_when_every_attempt_fails() {
         err.to_string().contains("all install attempts failed"),
         "{err}"
     );
+}
+
+#[test]
+fn command_install_reports_fallback_decision() {
+    let fs = MemFs::new();
+    let env = MemEnvStore::new();
+    let root = Path::new("/root");
+    let reporter = EventReporter::default();
+    let ctx = Ctx {
+        root: root.to_path_buf(),
+        fs: &fs,
+        downloader: &StubDownloader(Vec::new()),
+        runner: &FlakyProcess::new(1),
+        env: &env,
+        reporter: &reporter,
+    };
+    let plan = plan_for(root);
+
+    execute::execute(&plan, &ctx).unwrap();
+
+    let events = reporter.events.borrow();
+    let trail: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Progress::RunningCommand { tool } => Some(("try", tool.as_str())),
+            Progress::CommandFailed { tool, .. } => Some(("fail", tool.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(trail, [("try", "cargo"), ("fail", "cargo"), ("try", "npm")]);
+}
+
+#[test]
+fn execute_chain_reports_method_attempts() {
+    let fs = MemFs::new();
+    let env = MemEnvStore::new();
+    let root = Path::new("/root");
+    let reporter = EventReporter::default();
+    let ctx = Ctx {
+        root: root.to_path_buf(),
+        fs: &fs,
+        downloader: &StubDownloader(go_zip()),
+        runner: &FlakyProcess::new(1),
+        env: &env,
+        reporter: &reporter,
+    };
+    let plans = chain_plans(root);
+
+    let index = execute::execute_chain(&plans, &ctx).unwrap();
+
+    assert_eq!(index, 1);
+    let trail: Vec<_> = reporter
+        .events
+        .borrow()
+        .iter()
+        .filter_map(|event| match event {
+            Progress::TryingMethod { index, total } => Some(format!("try {index}/{total}")),
+            Progress::MethodFailed { .. } => Some("fail".to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(trail, ["try 1/2", "fail", "try 2/2"]);
 }

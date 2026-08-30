@@ -20,6 +20,7 @@ use crate::fs_path::DirName;
 /// assert_eq!(pinned.version(), &Version::parse("1.22.5").unwrap());
 ///
 /// let latest = ToolSpec::from_str("go").unwrap();
+/// assert_eq!(latest.name().as_str(), "go");
 /// assert_eq!(latest.version(), &Version::Latest);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

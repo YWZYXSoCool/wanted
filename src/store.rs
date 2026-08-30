@@ -1,4 +1,7 @@
-//! The `.wanted` directory layout.
+//! The `.wanted` record directory.
+//!
+//! `.wanted` holds only records — one receipt per installed tool. The apps
+//! themselves live in the directory where `wanted install` runs (the store's root).
 
 use std::path::PathBuf;
 
@@ -6,30 +9,29 @@ use crate::Result;
 use crate::engine::fs::Fs;
 use crate::fs_path::DirName;
 
-/// Layout accessor for the persistent root directory.
+/// Layout accessor for the record directory.
+///
+/// Installed apps live directly under `root` (the run directory); `.wanted`
+/// under it persists per-tool receipts so `list`, `uninstall`, and upgrade can
+/// reconstruct what was installed and where.
 pub struct Store {
     root: PathBuf,
 }
 
 impl Store {
-    /// Construct around a root directory (under which `.wanted` lives).
+    /// Construct around a run directory (under which `.wanted` lives).
     pub fn new(root: PathBuf) -> Self {
         Store { root }
     }
 
-    /// The project root directory.
+    /// The run directory where apps are installed.
     pub fn root(&self) -> &std::path::Path {
         &self.root
     }
 
-    /// The `.wanted` directory.
+    /// The `.wanted` record directory.
     pub fn store_dir(&self) -> PathBuf {
         self.root.join(".wanted")
-    }
-
-    /// Where installed tools are placed.
-    pub fn apps_dir(&self) -> PathBuf {
-        self.store_dir().join("apps")
     }
 
     /// Where install receipts live.
@@ -42,13 +44,13 @@ impl Store {
         self.installed_dir().join(name).join("receipt.toml")
     }
 
-    /// List installed tool names (direct subdirectories of `apps`).
+    /// List installed tool names (one record subdirectory of `installed`).
     pub fn list_installed(&self, fs: &dyn Fs) -> Result<Vec<String>> {
-        let apps = self.apps_dir();
-        if !fs.exists(&apps)? {
+        let installed = self.installed_dir();
+        if !fs.exists(&installed)? {
             return Ok(Vec::new());
         }
-        let entries = fs.read_dir(&apps)?;
+        let entries = fs.read_dir(&installed)?;
         let mut names: Vec<String> = entries
             .into_iter()
             .filter(|(_, is_dir)| *is_dir)

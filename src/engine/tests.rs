@@ -154,7 +154,7 @@ fn plan_is_pure_and_well_structured() {
     assert!(matches!(plan.staged_ops[1], Op::Unpack { .. }));
     assert_eq!(plan.commit_ops.len(), 1);
     assert!(matches!(plan.commit_ops[0], Op::WriteEnv { .. }));
-    assert_eq!(plan.dest_dir, Path::new("/root/.wanted/apps/golang"));
+    assert_eq!(plan.dest_dir, Path::new("/root/golang"));
 }
 
 #[test]
@@ -162,7 +162,7 @@ fn env_is_overridden_per_platform() {
     let manifest = Manifest::parse(ENV_PLATFORM_TOML).unwrap();
 
     let root = Path::new("/root");
-    let node_dir = root.join(".wanted").join("apps").join("node");
+    let node_dir = root.join("node");
 
     let windows = manifest
         .plan(root, &win_target(), &vsn(), &Selection::default())
@@ -207,11 +207,11 @@ fn execute_commits_and_persists_env() {
 
     execute::execute(&plan, &ctx).unwrap();
 
-    let app_file = root.join(".wanted/apps/golang/bin/go.exe");
+    let app_file = root.join("golang/bin/go.exe");
     assert_eq!(fs.read(&app_file).unwrap(), b"binary");
     assert!(!fs.exists(&staging_dir).unwrap());
 
-    let expected_path = root.join(".wanted").join("apps").join("golang").join("bin");
+    let expected_path = root.join("golang").join("bin");
     let actual = env.read(&EnvVar::from("PATH")).unwrap().unwrap();
     assert_eq!(actual, expected_path.to_string_lossy());
 }
@@ -242,9 +242,41 @@ fn execute_reports_phase_progress() {
         .filter_map(|event| match event {
             Progress::Phase(label) => Some(*label),
             Progress::Bytes { .. } => None,
+            _ => None,
         })
         .collect();
-    assert_eq!(phases, ["Downloading", "Extracting", "Configuring env"]);
+    assert_eq!(phases, ["Extracting", "Configuring env"]);
+}
+
+#[test]
+fn execute_reports_download_source_url() {
+    let fs = MemFs::new();
+    let env = MemEnvStore::new();
+    let reporter = RecordingReporter(RefCell::new(Vec::new()));
+    let root = Path::new("/root");
+    let ctx = Ctx {
+        root: root.to_path_buf(),
+        fs: &fs,
+        downloader: &StubDownloader(tool_zip()),
+        runner: &NoopProcess,
+        env: &env,
+        reporter: &reporter,
+    };
+    let manifest = Manifest::parse(GOLANG_TOML).unwrap();
+    let plan = plan_for(&manifest, root);
+
+    execute::execute(&plan, &ctx).unwrap();
+
+    let sources: Vec<_> = reporter
+        .0
+        .borrow()
+        .iter()
+        .filter_map(|event| match event {
+            Progress::DownloadSource { url } => Some(url.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sources, ["https://go.dev/d/1.23.0.zip"]);
 }
 
 #[test]
@@ -279,7 +311,7 @@ fn execute_reports_byte_progress_monotonically() {
         .iter()
         .filter_map(|event| match event {
             Progress::Bytes { done, total } => Some((*done, *total)),
-            Progress::Phase(_) => None,
+            _ => None,
         })
         .collect();
     assert_eq!(bytes, expected);

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 use crate::Version;
+use crate::engine::expand::{expand_template, resolve_template};
 use crate::engine::ops::{CommandInvocation, Op};
 use crate::engine::staging::Staging;
 use crate::engine::url::Url;
@@ -39,7 +40,7 @@ pub struct Plan {
     pub download_to: PathBuf,
     /// Extracted app root (to be moved to `dest_dir`).
     pub app_dir: PathBuf,
-    /// Final home directory (`apps/<base_dir>`).
+    /// Final home directory (`<base_dir>` in the run directory).
     pub dest_dir: PathBuf,
     /// Staging-phase operations (Download / Unpack).
     pub staged_ops: Vec<Op>,
@@ -139,7 +140,7 @@ impl Manifest {
         let staging_dir = staging.dir().to_path_buf();
         let download_to = staging_dir.join("downloads").join(url.file_name());
         let app_dir = staging_dir.join("app");
-        let dest_dir = root.join(".wanted").join("apps").join(base_dir);
+        let dest_dir = root.join(base_dir);
         let deltas =
             self.env_deltas(dest_dir.parent().unwrap_or(Path::new("")), target, version)?;
 
@@ -199,8 +200,11 @@ impl Manifest {
         let staging = Staging::new(&root.join(".wanted"), &self.meta.name);
         let staging_dir = staging.dir().to_path_buf();
         let download_to = staging_dir.join("downloads").join(url.file_name());
-        let dest_dir = root.join(".wanted").join("apps").join(base_dir);
-        let expanded = expand_installer_args(args, &dest_dir, version);
+        let dest_dir = root.join(base_dir);
+        let expanded = args
+            .iter()
+            .map(|arg| expand_template(arg, &dest_dir, version))
+            .collect();
         let deltas =
             self.env_deltas(dest_dir.parent().unwrap_or(Path::new("")), target, version)?;
 
@@ -228,7 +232,7 @@ impl Manifest {
     }
 
     /// Plan a command install: run external package-manager commands in fallback
-    /// order, writing the tool straight into `apps/<base_dir>`.
+    /// order, writing the tool straight into `<base_dir>` in the run directory.
     fn plan_command(
         &self,
         root: &Path,
@@ -251,7 +255,7 @@ impl Manifest {
         let base_dir = &self.install.base_dir;
         let staging = Staging::new(&root.join(".wanted"), &self.meta.name);
         let staging_dir = staging.dir().to_path_buf();
-        let dest_dir = root.join(".wanted").join("apps").join(base_dir);
+        let dest_dir = root.join(base_dir);
         let deltas =
             self.env_deltas(dest_dir.parent().unwrap_or(Path::new("")), target, version)?;
         let commands = raw_commands
@@ -341,13 +345,12 @@ impl Manifest {
     /// `env_by_platform` entry for `target` overrides the variable's template.
     fn env_deltas(
         &self,
-        apps_root: &Path,
+        run_dir: &Path,
         target: &Target,
         version: &Version,
     ) -> Result<Vec<EnvDelta>> {
         let mut deltas = Vec::new();
-        let base = apps_root.join(&self.install.base_dir);
-        let user_home = crate::env::user_home();
+        let base = run_dir.join(&self.install.base_dir);
         let platform_env = self.env_by_platform.get(&target.triplet());
         for (raw_name, template) in &self.env {
             let name = EnvVar::from(raw_name.as_str());
@@ -364,39 +367,10 @@ impl Manifest {
             };
             deltas.push(EnvDelta {
                 name,
-                value: resolve_template(template, &base, &user_home, version),
+                value: resolve_template(template, &base, version),
                 op,
             });
         }
         Ok(deltas)
     }
-}
-
-/// Expand template placeholders, joining relative paths under `base`.
-fn resolve_template(template: &str, base: &Path, user_home: &str, version: &Version) -> String {
-    let substituted = template
-        .replace("{version}", &version.to_string())
-        .replace("{user}", user_home);
-    let value_path = Path::new(&substituted);
-    if template.starts_with('$') || value_path.is_absolute() {
-        substituted
-    } else if value_path == Path::new(".") || value_path.as_os_str().is_empty() {
-        base.to_string_lossy().into_owned()
-    } else {
-        base.join(value_path).to_string_lossy().into_owned()
-    }
-}
-
-/// Expand installer args, substituting the install dir for `{base}` and the
-/// usual version/user placeholders.
-fn expand_installer_args(args: &[String], base: &Path, version: &Version) -> Vec<String> {
-    let base_str = base.to_string_lossy();
-    let user_home = crate::env::user_home();
-    args.iter()
-        .map(|arg| {
-            arg.replace("{base}", &base_str)
-                .replace("{version}", &version.to_string())
-                .replace("{user}", &user_home)
-        })
-        .collect()
 }

@@ -223,17 +223,129 @@ fallback = ["download"]
     assert!(Manifest::parse(source).is_err());
 }
 
+const VERSIONS_TOML: &str = r#"
+[meta]
+name = "go"
+version = "1.0.0"
+
+[install]
+method = "download"
+base_dir = "golang"
+asset = { "x86_64-pc-windows-msvc" = { default = "https://ex/go{version}.zip", "go.dev" = "https://go.dev/dl/go{version}.zip" } }
+
+[install.versions]
+default = ["1.21.0", "1.22.5"]
+"go.dev" = ["1.20.0", "1.22.5", "1.23.1"]
+"#;
+
 #[test]
-fn fallback_command_still_requires_commands() {
-    let source = r#"
+fn parses_versions_per_source() {
+    let manifest = Manifest::parse(VERSIONS_TOML).unwrap();
+    assert_eq!(manifest.install.versions["default"], ["1.21.0", "1.22.5"]);
+    assert_eq!(
+        manifest.install.versions["go.dev"],
+        ["1.20.0", "1.22.5", "1.23.1"]
+    );
+}
+
+#[test]
+fn versions_absent_are_empty() {
+    let manifest = Manifest::parse(GOLANG_TOML).unwrap();
+    assert!(manifest.install.versions.is_empty());
+}
+
+#[test]
+fn versions_for_defaults_to_default_source() {
+    let manifest = Manifest::parse(VERSIONS_TOML).unwrap();
+    assert_eq!(
+        manifest.install.versions_for(None),
+        Some(&vec!["1.21.0".into(), "1.22.5".into()])
+    );
+    assert_eq!(
+        manifest.install.versions_for(Some("go.dev")),
+        Some(&vec!["1.20.0".into(), "1.22.5".into(), "1.23.1".into()])
+    );
+    assert_eq!(manifest.install.versions_for(Some("missing")), None);
+}
+
+#[test]
+fn latest_for_resolves_newest_version_of_the_source() {
+    let manifest = Manifest::parse(VERSIONS_TOML).unwrap();
+    let latest = manifest.install.latest_for(None).unwrap().unwrap();
+    assert_eq!(latest, crate::Version::parse("1.22.5").unwrap());
+    let latest_dev = manifest
+        .install
+        .latest_for(Some("go.dev"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest_dev, crate::Version::parse("1.23.1").unwrap());
+}
+
+#[test]
+fn latest_for_is_none_when_source_declares_no_versions() {
+    let manifest = Manifest::parse(GOLANG_TOML).unwrap();
+    assert!(manifest.install.latest_for(None).is_none());
+}
+
+#[test]
+fn versions_source_for_exposes_declared_endpoint() {
+    const SOURCE: &str = r#"
 [meta]
 name = "go"
 version = "1.0.0"
 [install]
 method = "download"
 base_dir = "golang"
-fallback = ["command"]
-asset = { "x86_64-pc-windows-msvc" = { default = "https://ex/go{version}.zip" } }
+asset = { "x86_64-pc-windows-msvc" = { default = "https://ex/{version}.zip" } }
+[install.versions_source]
+default = { url = "https://ex/go/index.json", field = "version", strip = "go", stable_only = true }
 "#;
-    assert!(Manifest::parse(source).is_err());
+    let manifest = Manifest::parse(SOURCE).unwrap();
+    let source = manifest.install.versions_source_for(None).unwrap();
+    assert_eq!(source.url, "https://ex/go/index.json");
+    assert_eq!(source.field.as_deref(), Some("version"));
+    assert_eq!(source.strip.as_deref(), Some("go"));
+    assert!(source.stable_only);
+    assert!(
+        manifest
+            .install
+            .versions_source_for(Some("missing"))
+            .is_none()
+    );
+}
+
+#[test]
+fn versions_source_fills_no_inline_list() {
+    const SOURCE: &str = r#"
+[meta]
+name = "go"
+version = "1.0.0"
+[install]
+method = "download"
+base_dir = "golang"
+asset = { "x86_64-pc-windows-msvc" = { default = "https://ex/{version}.zip" } }
+[install.versions_source]
+default = { url = "https://ex/go/index.json" }
+"#;
+    let manifest = Manifest::parse(SOURCE).unwrap();
+    assert!(manifest.install.versions_for(None).is_none());
+    assert!(manifest.install.latest_for(None).is_none());
+    assert!(manifest.install.versions_source_for(None).is_some());
+}
+
+#[test]
+fn latest_for_errors_on_non_semver_version() {
+    const SOURCE: &str = r#"
+[meta]
+name = "go"
+version = "1.0.0"
+[install]
+method = "download"
+base_dir = "golang"
+asset = { "x86_64-pc-windows-msvc" = { default = "https://ex/{version}.zip" } }
+[install.versions]
+default = ["1.2.0", "go1.3.0"]
+"#;
+    let manifest = Manifest::parse(SOURCE).unwrap();
+    assert!(manifest.install.latest_for(None).unwrap().is_err());
 }

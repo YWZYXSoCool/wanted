@@ -12,7 +12,7 @@ fn sample() -> Receipt {
     Receipt {
         name: "golang".to_string(),
         version: Version::parse("1.23.0").unwrap(),
-        app_dir: AppDir::from("/root/.wanted/apps/golang"),
+        app_dir: AppDir::from("/root/golang"),
         vars: vec![
             VarSnapshot {
                 name: EnvVar::from("PATH"),

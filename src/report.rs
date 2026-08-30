@@ -4,11 +4,23 @@
 //! [`Reporter`] implementation (terminal spinner / silent / log). The engine and
 //! the display are decoupled, so tests can inject the silent implementation.
 
+pub mod terminal;
+
 /// One progress event during an install.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Progress {
-    /// Start of a phase (download, extract, write env).
+    /// Start of a named phase (extract, write env).
     Phase(&'static str),
+    /// A download is starting: pull `url` into the local staging file.
+    DownloadSource { url: String },
+    /// The install is attempting candidate method N of `total` (plan-level fallback).
+    TryingMethod { index: usize, total: usize },
+    /// A candidate method failed; the chain moves to the next one.
+    MethodFailed { error: String },
+    /// An external install command (e.g. a package manager) is being attempted.
+    RunningCommand { tool: String },
+    /// An external command failed; the command list moves to the next candidate.
+    CommandFailed { tool: String, error: String },
     /// Byte progress; `total` is `None` when unknown.
     Bytes { done: u64, total: Option<u64> },
 }
@@ -25,14 +37,14 @@ pub struct ProgressState {
 
 impl ProgressState {
     /// Advance state by applying an event: `Bytes` adopts the total and moves
-    /// the position monotonically; `Phase` resets to start fresh.
+    /// the position monotonically; any other event resets to start fresh.
     pub fn update(self, event: &Progress) -> ProgressState {
         match event {
-            Progress::Phase(_) => ProgressState::default(),
             Progress::Bytes { done, total } => ProgressState {
                 total: total.or(self.total),
                 position: self.position.max(*done),
             },
+            _ => ProgressState::default(),
         }
     }
 }

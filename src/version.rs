@@ -62,3 +62,65 @@ impl<'de> Deserialize<'de> for Version {
         Version::parse(&source).map_err(serde::de::Error::custom)
     }
 }
+
+/// Resolve a source's declared versions to the newest by semantic ordering.
+///
+/// Requires every version string to be a valid SemVer so the comparison is
+/// unambiguous; an empty list or a non-SemVer entry is an error rather than a
+/// best-effort guess.
+pub fn pick_latest(versions: &[String]) -> crate::Result<Version> {
+    if versions.is_empty() {
+        return Err(crate::Error::Other(
+            "source declares no versions to resolve latest".into(),
+        ));
+    }
+    let mut parsed = Vec::with_capacity(versions.len());
+    for raw in versions {
+        let version = raw.parse::<semver::Version>().map_err(|detail| {
+            crate::Error::Other(format!(
+                "cannot resolve latest: source version {raw:?} is not a comparable SemVer ({detail})"
+            ))
+        })?;
+        parsed.push(version);
+    }
+    parsed.sort();
+    parsed
+        .into_iter()
+        .max()
+        .map(Version::Pinned)
+        .ok_or_else(|| crate::Error::Other("source declares no versions".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn versions(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn pick_latest_selects_max_semver() {
+        let picked = pick_latest(&versions(&["1.2.0", "1.10.0", "1.3.1"])).unwrap();
+        assert_eq!(picked, Version::parse("1.10.0").unwrap());
+    }
+
+    #[test]
+    fn pick_latest_single_entry() {
+        assert_eq!(
+            pick_latest(&versions(&["0.1.0"])).unwrap(),
+            Version::parse("0.1.0").unwrap()
+        );
+    }
+
+    #[test]
+    fn pick_latest_errors_on_empty_list() {
+        assert!(pick_latest(&[]).is_err());
+    }
+
+    #[test]
+    fn pick_latest_errors_on_non_semver_entry() {
+        let err = pick_latest(&versions(&["1.2.0", "go1.3.0"])).unwrap_err();
+        assert!(err.to_string().contains("go1.3.0"));
+    }
+}
