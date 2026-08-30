@@ -1,8 +1,17 @@
 [package]
 build = "build.rs"
+categories = ["command-line-utilities", "development-tools"]
+description = "A plugin-driven installer for development tools: a tool ships as a plain TOML manifest declaring how to get it, where to install it, and what environment variables to set."
 edition = "2024"
+homepage = "https://github.com/YWZYXSoCool/wanted"
+keywords = ["installer", "dev-tools", "tui", "plugin"]
+license = "MIT OR Apache-2.0"
 name = "wanted"
+readme = "README.md"
+repository = "https://github.com/YWZYXSoCool/wanted.git"
 version = "0.1.0"
+
+exclude = ["registry/**"]
 
 [dependencies]
 clap = {version = "4.6", features = ["derive"]}
