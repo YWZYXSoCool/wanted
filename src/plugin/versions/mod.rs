@@ -41,11 +41,10 @@ impl VersionsSource {
         let mut versions = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for raw in self.candidates(&json) {
-            if let Some(version) = self.normalize(&raw) {
-                if seen.insert(version.clone()) {
+            if let Some(version) = self.normalize(&raw)
+                && seen.insert(version.clone()) {
                     versions.push(version);
                 }
-            }
         }
         if versions.is_empty() {
             return Err(Error::Other(format!(
