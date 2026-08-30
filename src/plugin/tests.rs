@@ -315,6 +315,26 @@ default = { url = "https://ex/go/index.json", field = "version", strip = "go", s
 }
 
 #[test]
+fn versions_source_parses_suffix_and_nested_fields() {
+    const SOURCE: &str = r#"
+[meta]
+name = "python3"
+version = "1.1.0"
+[install]
+method = "download"
+base_dir = "python3"
+asset = { "x86_64-unknown-linux-gnu" = { default = "https://ex/{date}/{version}.tar.gz" } }
+[install.versions_source]
+default = { url = "https://ex/pbs/latest", field = "assets[].name", strip = "cpython-", suffix = "-x86_64-unknown-linux-gnu-install_only.tar.gz", stable_only = true }
+"#;
+    let manifest = Manifest::parse(SOURCE).unwrap();
+    let source = manifest.install.versions_source_for(None).unwrap();
+    assert_eq!(source.field.as_deref(), Some("assets[].name"));
+    assert_eq!(source.strip.as_deref(), Some("cpython-"));
+    assert_eq!(source.suffix.as_deref(), Some("-x86_64-unknown-linux-gnu-install_only.tar.gz"));
+}
+
+#[test]
 fn versions_source_fills_no_inline_list() {
     const SOURCE: &str = r#"
 [meta]

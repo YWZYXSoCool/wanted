@@ -34,6 +34,19 @@ GOROOT = "."
 
 /// A manifest declaring per-platform env overrides: Windows flattens the install
 /// to the base (`.`) while other platforms keep the binaries under `bin/`.
+/// A manifest whose asset URL carries both `{version}` and `{date}` (the
+/// python-build-standalone shape: the date is the version's build metadata).
+const PBS_TOML: &str = r#"
+[meta]
+name = "python3"
+version = "1.1.0"
+
+[install]
+method = "download"
+asset = { "x86_64-pc-windows-msvc" = { default = "https://ex/python-build-standalone/releases/download/{date}/cpython-{version}-x86_64-pc-windows-msvc-install_only.tar.gz" } }
+base_dir = "python3"
+"#;
+
 const ENV_PLATFORM_TOML: &str = r#"
 [meta]
 name = "node"
@@ -388,6 +401,19 @@ fn plan_defaults_to_the_default_asset_source() {
     let manifest = Manifest::parse(GOLANG_TOML).unwrap();
     let plan = plan_for(&manifest, Path::new("/root"));
     assert_eq!(download_url(&plan), "https://go.dev/d/1.23.0.zip");
+}
+
+#[test]
+fn plan_url_expands_version_build_metadata_into_date() {
+    let manifest = Manifest::parse(PBS_TOML).unwrap();
+    let version = Version::parse("3.13.0+20260825").unwrap();
+    let plan = manifest
+        .plan(Path::new("/root"), &win_target(), &version, &Selection::default())
+        .unwrap();
+    assert_eq!(
+        download_url(&plan),
+        "https://ex/python-build-standalone/releases/download/20260825/cpython-3.13.0+20260825-x86_64-pc-windows-msvc-install_only.tar.gz"
+    );
 }
 
 #[test]

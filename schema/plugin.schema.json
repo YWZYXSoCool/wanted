@@ -284,6 +284,14 @@
           ],
           "default": null
         },
+        "suffix": {
+          "description": "Literal suffix stripped from the tail of each version (e.g.\n\"-x86_64-unknown-linux-gnu-install_only.tar.gz\"). The suffix is required:\na candidate that does not carry it is dropped entirely, so unrelated\nasset-name tails never leak into the version list. No stripping when\nabsent.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "url": {
           "description": "URL whose GET response is JSON (fetched in full).",
           "type": "string"

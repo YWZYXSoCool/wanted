@@ -9,17 +9,38 @@ use std::path::Path;
 
 use crate::Version;
 
-/// Substitute `{base}`, `{version}`, and `{user}` placeholders in `template`.
+/// Substitute `{base}`, `{version}`, `{date}`, and `{user}` placeholders.
 ///
 /// `base` becomes the install directory for this run, `{version}` the pinned
-/// version (or `latest`), and `{user}` the current user's home directory.
+/// version (or `latest`), `{date}` that version's SemVer build-metadata suffix
+/// (empty when absent, e.g. the `20260825` in `3.13.0+20260825`), and `{user}`
+/// the current user's home directory.
 pub(crate) fn expand_template(template: &str, base: &Path, version: &Version) -> String {
     let base_str = base.to_string_lossy();
     let user_home = crate::env::user_home();
     template
         .replace("{base}", &base_str)
         .replace("{version}", &version.to_string())
+        .replace("{date}", &build_date(version))
         .replace("{user}", &user_home)
+}
+
+/// Substitute the version-only placeholders (`{version}`, `{date}`) for a URL
+/// template. Asset URLs carry no `{base}`/`{user}` and are expanded directly,
+/// so this stays separate from [`expand_template`].
+pub(crate) fn expand_url(template: &str, version: &Version) -> String {
+    template
+        .replace("{version}", &version.to_string())
+        .replace("{date}", &build_date(version))
+}
+
+/// The SemVer build-metadata tail of a pinned version (`20260825` for
+/// `3.13.0+20260825`); empty for `latest` or a version with no build suffix.
+fn build_date(version: &Version) -> String {
+    match version {
+        Version::Pinned(value) => value.build.as_str().to_string(),
+        Version::Latest => String::new(),
+    }
 }
 
 /// Resolve an environment-value template, joining relative paths under `base` so

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 use crate::Version;
-use crate::engine::expand::{expand_template, resolve_template};
+use crate::engine::expand::{expand_template, expand_url, resolve_template};
 use crate::engine::ops::{CommandInvocation, Op};
 use crate::engine::staging::Staging;
 use crate::engine::url::Url;
@@ -277,12 +277,11 @@ impl Manifest {
         })
     }
 
-    /// Pick the asset URL for the current platform and source, substituting `{version}`.
+    /// Pick the asset URL for the current platform and source, substituting
+    /// `{version}` and `{date}`.
     fn install_url(&self, target: &Target, version: &Version, source: Option<&str>) -> Result<Url> {
         let template = self.source_template(&self.install.assets, target, source)?;
-        Ok(Url::from(
-            template.replace("{version}", &version.to_string()),
-        ))
+        Ok(Url::from(expand_url(template, version)))
     }
 
     /// Push a Download + Unpack pair for one enabled component, extracted under
@@ -302,7 +301,7 @@ impl Manifest {
             }
         })?;
         let template = self.source_template(assets, target, source)?;
-        let url = Url::from(template.replace("{version}", &version.to_string()));
+        let url = Url::from(expand_url(template, version));
         let to = staging_dir
             .join("downloads")
             .join(format!("{component}-{}", url.file_name()));

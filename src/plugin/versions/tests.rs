@@ -9,7 +9,19 @@ fn source(field: Option<&str>, strip: Option<&str>, stable_only: bool) -> Versio
         url: "https://example.invalid/versions.json".into(),
         field: field.map(str::to_owned),
         strip: strip.map(str::to_owned),
+        suffix: None,
         stable_only,
+    }
+}
+
+/// A source that also strips a tail `suffix` (mirrors python-build-standalone).
+fn source_suffixed(field: &str, strip: &str, suffix: &str) -> VersionsSource {
+    VersionsSource {
+        url: "https://example.invalid/versions.json".into(),
+        field: Some(field.to_owned()),
+        strip: Some(strip.to_owned()),
+        suffix: Some(suffix.to_owned()),
+        stable_only: true,
     }
 }
 
@@ -129,4 +141,67 @@ fn errors_on_non_json_body() {
 fn errors_on_scalar_body() {
     let spec = source(None, None, false);
     assert!(spec.parse("42").is_err());
+}
+
+#[test]
+fn nested_path_asset_name_with_strip_and_suffix() {
+    let spec = source_suffixed(
+        "assets[].name",
+        "cpython-",
+        "-x86_64-unknown-linux-gnu-install_only.tar.gz",
+    );
+    let body = r#"{
+        "tag_name": "20260825",
+        "assets": [
+            {"name": "cpython-3.13.0+20260825-x86_64-unknown-linux-gnu-install_only.tar.gz"},
+            {"name": "cpython-3.12.7+20260825-x86_64-unknown-linux-gnu-install_only.tar.gz"},
+            {"name": "cpython-3.14.0rc1+20260825-x86_64-unknown-linux-gnu-install_only.tar.gz"},
+            {"name": "cpython-3.13.0+20260825-aarch64-apple-darwin-install_only.tar.gz"},
+            {"name": "cpython-3.13.0+20260825-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"}
+        ]
+    }"#;
+    let versions = spec.parse(body).unwrap();
+    assert!(versions.contains(&"3.13.0+20260825".to_string()));
+    assert!(versions.contains(&"3.12.7+20260825".to_string()));
+    assert!(!versions.iter().any(|v| v.contains("rc")));
+    assert!(!versions.iter().any(|v| v.contains("cpython")));
+    assert!(!versions.iter().any(|v| v.contains("install_only")));
+}
+
+#[test]
+fn nested_path_dedups_repeated_versions() {
+    let spec = source_suffixed(
+        "assets[].name",
+        "cpython-",
+        "-x86_64-unknown-linux-gnu-install_only.tar.gz",
+    );
+    let body = r#"{
+        "assets": [
+            {"name": "cpython-3.13.0+20260825-x86_64-unknown-linux-gnu-install_only.tar.gz"},
+            {"name": "cpython-3.13.0+20260825-x86_64-unknown-linux-gnu-install_only.tar.gz"}
+        ]
+    }"#;
+    let versions = spec.parse(body).unwrap();
+    assert_eq!(
+        versions
+            .iter()
+            .filter(|v| *v == "3.13.0+20260825")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn suffix_mismatch_is_dropped_not_kept() {
+    let spec = source_suffixed(
+        "assets[].name",
+        "cpython-",
+        "-x86_64-unknown-linux-gnu-install_only.tar.gz",
+    );
+    let body = r#"{
+        "assets": [
+            {"name": "cpython-3.13.0+20260825-aarch64-apple-darwin-install_only.tar.gz"}
+        ]
+    }"#;
+    assert!(spec.parse(body).is_err());
 }

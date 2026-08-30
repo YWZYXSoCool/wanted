@@ -80,6 +80,13 @@ pub struct VersionsSource {
     /// "llvmorg-"). No stripping when absent.
     #[serde(default)]
     pub strip: Option<String>,
+    /// Literal suffix stripped from the tail of each version (e.g.
+    /// "-x86_64-unknown-linux-gnu-install_only.tar.gz"). The suffix is required:
+    /// a candidate that does not carry it is dropped entirely, so unrelated
+    /// asset-name tails never leak into the version list. No stripping when
+    /// absent.
+    #[serde(default)]
+    pub suffix: Option<String>,
     /// Drop versions carrying a SemVer pre-release segment (rc / beta / alpha).
     /// Defaults to false.
     #[serde(default)]
