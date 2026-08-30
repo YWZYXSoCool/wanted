@@ -1,6 +1,8 @@
 //! Persistent write-back backend for environment variables.
 
 use std::path::PathBuf;
+#[cfg(not(windows))]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::Result;
 use crate::env::EnvStore;
@@ -153,6 +155,13 @@ fn read_lines(path: &PathBuf) -> Result<Option<Vec<String>>> {
     Ok(Some(text.lines().map(str::to_owned).collect()))
 }
 
+/// Monotonic sequence granting each in-process write its own temp path. A
+/// pid-only temp name would let one writer's `rename` evict another writer's
+/// still-pending file, so its `rename` would then fail with `NotFound`; pid plus
+/// sequence stays unique both within and across processes.
+#[cfg(not(windows))]
+static WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
+
 /// Write the script atomically (temp file + rename) so a reader never sees a
 /// partially-written file.
 #[cfg(not(windows))]
@@ -163,7 +172,8 @@ fn write_lines_atomic(path: &PathBuf, lines: &[String]) -> Result<()> {
         path: parent.to_path_buf(),
         source: e,
     })?;
-    let tmp = parent.join(format!(".env.sh.{}.tmp", std::process::id()));
+    let seq = WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = parent.join(format!(".env.sh.{}.{seq}.tmp", std::process::id()));
     let write = std::fs::File::create(&tmp).and_then(|mut f| {
         for line in lines {
             writeln!(f, "{line}")?;
