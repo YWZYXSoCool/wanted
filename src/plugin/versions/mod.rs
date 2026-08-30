@@ -42,9 +42,10 @@ impl VersionsSource {
         let mut seen = std::collections::HashSet::new();
         for raw in self.candidates(&json) {
             if let Some(version) = self.normalize(&raw)
-                && seen.insert(version.clone()) {
-                    versions.push(version);
-                }
+                && seen.insert(version.clone())
+            {
+                versions.push(version);
+            }
         }
         if versions.is_empty() {
             return Err(Error::Other(format!(
