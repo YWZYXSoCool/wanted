@@ -4,6 +4,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::Version;
+use crate::fs_path::DirName;
 
 /// A tool spec from the command line, e.g. `go@1.22.5`.
 ///
@@ -23,14 +24,14 @@ use crate::Version;
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ToolSpec {
-    name: String,
+    name: DirName,
     version: Version,
 }
 
 impl ToolSpec {
     /// The tool name, the part before `@`.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &DirName {
         &self.name
     }
 
@@ -51,7 +52,7 @@ impl FromStr for ToolSpec {
         }
         match spec.split_once('@') {
             None => Ok(ToolSpec {
-                name: spec.to_string(),
+                name: parse_name(spec)?,
                 version: Version::Latest,
             }),
             Some((name, version)) => Self::pinned(name, version, spec),
@@ -78,10 +79,19 @@ impl ToolSpec {
                     detail: detail.to_string(),
                 })?;
         Ok(ToolSpec {
-            name: name.to_string(),
+            name: parse_name(name)?,
             version,
         })
     }
+}
+
+/// Parse the tool name as a platform-safe directory segment.
+fn parse_name(raw: &str) -> Result<DirName, ToolSpecError> {
+    raw.to_string()
+        .try_into()
+        .map_err(|_| ToolSpecError::InvalidName {
+            raw: raw.to_string(),
+        })
 }
 
 /// An invalid tool spec.
@@ -93,6 +103,9 @@ pub enum ToolSpecError {
     /// The spec has nothing before `@`.
     #[error("missing tool name before '@' in {raw:?}")]
     MissingName { raw: String },
+    /// The tool name is not usable as a directory segment on this platform.
+    #[error("tool name is not usable as a directory segment: {raw:?}")]
+    InvalidName { raw: String },
     /// The version after `@` is not a valid SemVer.
     #[error("tool spec {raw:?} has an invalid version: {detail}")]
     InvalidVersion { raw: String, detail: String },

@@ -12,6 +12,7 @@ use std::path::Path;
 
 use crate::Result;
 use crate::error::Error;
+use crate::fs_path::DirName;
 
 use raw::RawManifest;
 pub use raw::{AssetMap, EnvBox, InstallMethod, RawCommand, RawStrategy};
@@ -24,8 +25,8 @@ pub(crate) const DEFAULT_SOURCE: &str = "default";
 /// Manifest metadata.
 #[derive(Clone, Debug)]
 pub struct Meta {
-    /// Tool name.
-    pub name: String,
+    /// Tool name (used as a directory segment for `plugins/<name>` and the receipt).
+    pub name: DirName,
     /// Manifest's own version (SemVer).
     pub version: String,
     /// Source / update origin.
@@ -41,8 +42,8 @@ pub struct Install {
     pub assets: AssetMap,
     /// Optional components (platform-keyed like `assets`), downloaded only when enabled.
     pub components: BTreeMap<String, AssetMap>,
-    /// Placement path relative to `apps`.
-    pub base_dir: String,
+    /// Placement path relative to `apps` (used as a directory segment).
+    pub base_dir: DirName,
     /// The PATH box.
     pub env_box: EnvBox,
     /// Default silent-install arguments (with `{base}`), used by the `installer` method.
@@ -66,6 +67,8 @@ pub struct Manifest {
     pub install: Install,
     /// Environment variables to configure (name -> template).
     pub env: BTreeMap<String, String>,
+    /// Per-platform overrides of `env` values, keyed by platform triplet.
+    pub env_by_platform: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl Manifest {
@@ -84,10 +87,11 @@ impl Manifest {
     }
 
     fn from_raw(raw: RawManifest) -> Result<Self> {
-        let name = raw
+        let name: DirName = raw
             .meta
             .name
-            .ok_or(Error::MissingField { field: "meta.name" })?;
+            .ok_or(Error::MissingField { field: "meta.name" })?
+            .try_into()?;
         let version = raw.meta.version.ok_or(Error::MissingField {
             field: "meta.version",
         })?;
@@ -121,7 +125,7 @@ impl Manifest {
                 method: raw.install.method,
                 assets: raw.install.asset,
                 components: raw.install.component,
-                base_dir: raw.install.base_dir,
+                base_dir: raw.install.base_dir.try_into()?,
                 env_box: raw.install.env_box.unwrap_or(EnvBox::Prepend),
                 args: raw.install.args,
                 strategy: raw.install.strategy,
@@ -129,6 +133,7 @@ impl Manifest {
                 fallback: raw.install.fallback,
             },
             env: raw.env,
+            env_by_platform: raw.env_by_platform,
         })
     }
 }

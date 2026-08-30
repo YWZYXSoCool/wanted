@@ -19,32 +19,32 @@ impl RealEnvStore {
 
 impl EnvStore for RealEnvStore {
     #[cfg(windows)]
-    fn read(&self, name: &str) -> Result<Option<String>> {
-        match winreg_read(name) {
+    fn read(&self, name: &crate::env::EnvVar) -> Result<Option<String>> {
+        match winreg_read(name.as_str()) {
             Ok(value) => Ok(Some(value)),
             Err(io) if io.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(io) => Err(Error::Other(format!("read env {name}: {io}"))),
         }
     }
     #[cfg(windows)]
-    fn write(&self, name: &str, value: &str) -> Result<()> {
-        winreg_write(name, value)
+    fn write(&self, name: &crate::env::EnvVar, value: &str) -> Result<()> {
+        winreg_write(name.as_str(), value)
     }
     #[cfg(windows)]
-    fn remove(&self, name: &str) -> Result<()> {
-        winreg_remove(name)
+    fn remove(&self, name: &crate::env::EnvVar) -> Result<()> {
+        winreg_remove(name.as_str())
     }
 
     #[cfg(not(windows))]
-    fn read(&self, _name: &str) -> Result<Option<String>> {
+    fn read(&self, _name: &crate::env::EnvVar) -> Result<Option<String>> {
         Err(Error::Unsupported("persistent env write on POSIX"))
     }
     #[cfg(not(windows))]
-    fn write(&self, _name: &str, _value: &str) -> Result<()> {
+    fn write(&self, _name: &crate::env::EnvVar, _value: &str) -> Result<()> {
         Err(Error::Unsupported("persistent env write on POSIX"))
     }
     #[cfg(not(windows))]
-    fn remove(&self, _name: &str) -> Result<()> {
+    fn remove(&self, _name: &crate::env::EnvVar) -> Result<()> {
         Err(Error::Unsupported("persistent env write on POSIX"))
     }
 }

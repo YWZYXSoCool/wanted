@@ -7,21 +7,21 @@ use std::str::FromStr;
 #[test]
 fn test_pinned_name_and_version() {
     let spec = ToolSpec::from_str("go@1.22.5").unwrap();
-    assert_eq!(spec.name(), "go");
+    assert_eq!(spec.name().as_str(), "go");
     assert_eq!(spec.version(), &Version::parse("1.22.5").unwrap());
 }
 
 #[test]
 fn test_bare_name_defaults_to_latest() {
     let spec = ToolSpec::from_str("go").unwrap();
-    assert_eq!(spec.name(), "go");
+    assert_eq!(spec.name().as_str(), "go");
     assert_eq!(spec.version(), &Version::Latest);
 }
 
 #[test]
 fn test_whitespace_is_trimmed() {
     let spec = ToolSpec::from_str("  go@1.2.0  ").unwrap();
-    assert_eq!(spec.name(), "go");
+    assert_eq!(spec.name().as_str(), "go");
     assert_eq!(spec.version(), &Version::parse("1.2.0").unwrap());
 }
 

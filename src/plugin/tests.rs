@@ -55,11 +55,11 @@ GOROOT = "."
 #[test]
 fn parses_golang_manifest() {
     let manifest = Manifest::parse(GOLANG_TOML).unwrap();
-    assert_eq!(manifest.meta.name, "golang");
+    assert_eq!(manifest.meta.name.as_str(), "golang");
     assert_eq!(manifest.meta.version, "1.0.0");
     assert_eq!(manifest.meta.url.as_deref(), Some("https://go.dev"));
     assert_eq!(manifest.install.method, InstallMethod::Download);
-    assert_eq!(manifest.install.base_dir, "golang");
+    assert_eq!(manifest.install.base_dir.as_str(), "golang");
     assert_eq!(manifest.install.env_box, EnvBox::Prepend);
     assert_eq!(manifest.install.assets.len(), 2);
     assert!(manifest.install.assets["x86_64-pc-windows-msvc"].contains_key("default"));

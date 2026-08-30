@@ -11,7 +11,7 @@ use crate::engine::fs::{Fs, MemFs};
 use crate::engine::ops::Op;
 use crate::engine::plan::Selection;
 use crate::engine::{Ctx, Downloader, ProcessRunner, Url};
-use crate::env::{EnvStore, MemEnvStore};
+use crate::env::{EnvStore, EnvVar, MemEnvStore};
 use crate::plugin::{Manifest, Target};
 use crate::report::{Progress, Reporter, SilentReporter};
 
@@ -125,17 +125,17 @@ struct FailingEnv {
 }
 
 impl EnvStore for FailingEnv {
-    fn read(&self, name: &str) -> crate::Result<Option<String>> {
+    fn read(&self, name: &EnvVar) -> crate::Result<Option<String>> {
         self.inner.read(name)
     }
-    fn write(&self, name: &str, value: &str) -> crate::Result<()> {
-        if name == "PATH" {
+    fn write(&self, name: &EnvVar, value: &str) -> crate::Result<()> {
+        if name.is_path() {
             Err(crate::Error::Other("simulated env write failure".into()))
         } else {
             self.inner.write(name, value)
         }
     }
-    fn remove(&self, name: &str) -> crate::Result<()> {
+    fn remove(&self, name: &EnvVar) -> crate::Result<()> {
         self.inner.remove(name)
     }
 }
@@ -168,7 +168,7 @@ fn plan_builds_run_command_op() {
     assert_eq!(base, &plan.dest_dir);
     let base_str = base.to_string_lossy();
 
-    assert_eq!(commands[0].tool, "cargo");
+    assert_eq!(commands[0].tool.as_str(), "cargo");
     let expected_args = vec![
         "install".to_string(),
         "--root".to_string(),
@@ -181,7 +181,7 @@ fn plan_builds_run_command_op() {
         vec![("CARGO_INSTALL_ROOT".to_string(), base_str.to_string())]
     );
 
-    assert_eq!(commands[1].tool, "npm");
+    assert_eq!(commands[1].tool.as_str(), "npm");
     assert!(commands[1].env.is_empty());
 }
 
@@ -234,7 +234,10 @@ fn execute_falls_back_to_second_command_on_first_failure() {
     assert_eq!(calls[0].0, "cargo");
     assert_eq!(calls[1].0, "npm");
     assert!(fs.exists(&plan.dest_dir).unwrap());
-    assert_eq!(env.read("PATH").unwrap().unwrap(), expected_path(root));
+    assert_eq!(
+        env.read(&EnvVar::from("PATH")).unwrap().unwrap(),
+        expected_path(root)
+    );
 }
 
 #[test]
@@ -398,7 +401,7 @@ fn execute_chain_falls_back_to_download_when_command_fails() {
     assert!(fs.exists(&plans[1].dest_dir).unwrap());
     let expected = root.join(".wanted").join("apps").join("golang").join("bin");
     assert_eq!(
-        env.read("PATH").unwrap().unwrap(),
+        env.read(&EnvVar::from("PATH")).unwrap().unwrap(),
         expected.to_string_lossy()
     );
 }

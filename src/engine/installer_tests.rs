@@ -9,7 +9,7 @@ use crate::engine::fs::{Fs, MemFs};
 use crate::engine::ops::Op;
 use crate::engine::plan::Selection;
 use crate::engine::{Ctx, Downloader, ProcessRunner, Url};
-use crate::env::{EnvStore, MemEnvStore};
+use crate::env::{EnvStore, EnvVar, MemEnvStore};
 use crate::plugin::{Manifest, Target};
 use crate::report::SilentReporter;
 
@@ -78,17 +78,17 @@ struct FailingEnv {
 }
 
 impl EnvStore for FailingEnv {
-    fn read(&self, name: &str) -> crate::Result<Option<String>> {
+    fn read(&self, name: &EnvVar) -> crate::Result<Option<String>> {
         self.inner.read(name)
     }
-    fn write(&self, name: &str, value: &str) -> crate::Result<()> {
-        if name == "PATH" {
+    fn write(&self, name: &EnvVar, value: &str) -> crate::Result<()> {
+        if name.is_path() {
             Err(crate::Error::Other("simulated env write failure".into()))
         } else {
             self.inner.write(name, value)
         }
     }
-    fn remove(&self, name: &str) -> crate::Result<()> {
+    fn remove(&self, name: &EnvVar) -> crate::Result<()> {
         self.inner.remove(name)
     }
 }
@@ -148,7 +148,7 @@ fn execute_installer_keeps_dest_and_persists_env() {
     assert!(!fs.exists(&staging_dir).unwrap());
     let expected_path = root.join(".wanted").join("apps").join("gcc").join("bin");
     assert_eq!(
-        env.read("PATH").unwrap().unwrap(),
+        env.read(&EnvVar::from("PATH")).unwrap().unwrap(),
         expected_path.to_string_lossy()
     );
 }

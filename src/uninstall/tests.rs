@@ -8,7 +8,13 @@ use crate::Receipt;
 use crate::VarSnapshot;
 use crate::Version;
 use crate::engine::fs::{Fs, MemFs};
-use crate::env::{EnvDelta, EnvOp, EnvStore, MemEnvStore, PATH_SEP};
+use crate::env::{EnvDelta, EnvOp, EnvStore, EnvVar, MemEnvStore, PATH_SEP};
+use crate::fs_path::AppDir;
+
+/// The PATH variable, for store calls that take a name.
+fn path() -> EnvVar {
+    EnvVar::from("PATH")
+}
 
 #[test]
 fn apply_receipt_removes_app_and_restores_env() {
@@ -18,27 +24,28 @@ fn apply_receipt_removes_app_and_restores_env() {
     fs.write(&app_root.join("go/bin/go.exe"), b"binary")
         .unwrap();
     env.write(
-        "PATH",
+        &path(),
         &format!(
             "/root/.wanted/apps/golang/bin{PATH_SEP}/root/.wanted/apps/gcc/bin{PATH_SEP}/usr/bin"
         ),
     )
     .unwrap();
-    env.write("GOROOT", "/root/.wanted/apps/golang").unwrap();
+    env.write(&EnvVar::from("GOROOT"), "/root/.wanted/apps/golang")
+        .unwrap();
 
     let receipt = Receipt {
         name: "golang".to_string(),
         version: Version::parse("1.23.0").unwrap(),
-        app_dir: app_root.to_string_lossy().into_owned(),
+        app_dir: AppDir::from_path(app_root),
         vars: vec![
             VarSnapshot {
-                name: "PATH".to_string(),
+                name: path(),
                 op: EnvOp::Prepend,
                 value: "/root/.wanted/apps/golang/bin".to_string(),
                 old: Some("/usr/bin".to_string()),
             },
             VarSnapshot {
-                name: "GOROOT".to_string(),
+                name: EnvVar::from("GOROOT"),
                 op: EnvOp::Set,
                 value: "/root/.wanted/apps/golang".to_string(),
                 old: None,
@@ -50,10 +57,10 @@ fn apply_receipt_removes_app_and_restores_env() {
 
     assert!(!fs.exists(app_root).unwrap());
     assert_eq!(
-        env.read("PATH").unwrap().unwrap(),
+        env.read(&path()).unwrap().unwrap(),
         format!("/root/.wanted/apps/gcc/bin{PATH_SEP}/usr/bin")
     );
-    assert_eq!(env.read("GOROOT").unwrap(), None);
+    assert_eq!(env.read(&EnvVar::from("GOROOT")).unwrap(), None);
 }
 
 /// Install A, then B on top, then uninstall A out of order. A's removal must
@@ -63,15 +70,15 @@ fn apply_receipt_removes_app_and_restores_env() {
 fn uninstall_of_earlier_app_preserves_later_app_path() {
     let fs = MemFs::new();
     let env = MemEnvStore::new();
-    env.write("PATH", "/usr/bin").unwrap();
+    env.write(&path(), "/usr/bin").unwrap();
 
     // Receipt A: installed when PATH was `orig`.
     let receipt_a = Receipt {
         name: "gcc".to_string(),
         version: Version::parse("13.0.0").unwrap(),
-        app_dir: "/root/.wanted/apps/gcc".to_string(),
+        app_dir: AppDir::from("/root/.wanted/apps/gcc"),
         vars: vec![VarSnapshot {
-            name: "PATH".to_string(),
+            name: path(),
             op: EnvOp::Prepend,
             value: "/root/.wanted/apps/gcc/bin".to_string(),
             old: Some("/usr/bin".to_string()),
@@ -80,7 +87,7 @@ fn uninstall_of_earlier_app_preserves_later_app_path() {
     // Simulate install A's merge.
     crate::env::apply_deltas(
         &[EnvDelta {
-            name: "PATH".into(),
+            name: path(),
             value: "/root/.wanted/apps/gcc/bin".into(),
             op: EnvOp::Prepend,
         }],
@@ -92,9 +99,9 @@ fn uninstall_of_earlier_app_preserves_later_app_path() {
     let receipt_b = Receipt {
         name: "golang".to_string(),
         version: Version::parse("1.23.0").unwrap(),
-        app_dir: "/root/.wanted/apps/golang".to_string(),
+        app_dir: AppDir::from("/root/.wanted/apps/golang"),
         vars: vec![VarSnapshot {
-            name: "PATH".to_string(),
+            name: path(),
             op: EnvOp::Prepend,
             value: "/root/.wanted/apps/golang/bin".to_string(),
             old: Some(format!("/root/.wanted/apps/gcc/bin{PATH_SEP}/usr/bin")),
@@ -102,7 +109,7 @@ fn uninstall_of_earlier_app_preserves_later_app_path() {
     };
     crate::env::apply_deltas(
         &[EnvDelta {
-            name: "PATH".into(),
+            name: path(),
             value: "/root/.wanted/apps/golang/bin".into(),
             op: EnvOp::Prepend,
         }],
@@ -110,7 +117,7 @@ fn uninstall_of_earlier_app_preserves_later_app_path() {
     )
     .unwrap();
     assert_eq!(
-        env.read("PATH").unwrap().unwrap(),
+        env.read(&path()).unwrap().unwrap(),
         format!(
             "/root/.wanted/apps/golang/bin{PATH_SEP}/root/.wanted/apps/gcc/bin{PATH_SEP}/usr/bin"
         )
@@ -121,12 +128,12 @@ fn uninstall_of_earlier_app_preserves_later_app_path() {
 
     // B's segment must survive.
     assert_eq!(
-        env.read("PATH").unwrap().unwrap(),
+        env.read(&path()).unwrap().unwrap(),
         format!("/root/.wanted/apps/golang/bin{PATH_SEP}/usr/bin")
     );
     // Uninstall B leaves only the original PATH.
     apply_receipt(&receipt_b, &fs, &env).unwrap();
-    assert_eq!(env.read("PATH").unwrap().unwrap(), "/usr/bin");
+    assert_eq!(env.read(&path()).unwrap().unwrap(), "/usr/bin");
 }
 
 #[test]
@@ -136,7 +143,7 @@ fn remove_receipt_deletes_subtree() {
     let receipt = Receipt {
         name: "golang".to_string(),
         version: Version::parse("1.23.0").unwrap(),
-        app_dir: "/root/.wanted/apps/golang".to_string(),
+        app_dir: AppDir::from("/root/.wanted/apps/golang"),
         vars: vec![],
     };
     receipt.write(&fs, path).unwrap();

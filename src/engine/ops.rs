@@ -10,7 +10,7 @@ use crate::Result;
 use crate::Version;
 use crate::engine::fs::Fs;
 use crate::engine::{Ctx, Url, unpack};
-use crate::env::{self, EnvDelta};
+use crate::env::{self, EnvDelta, EnvVar};
 use crate::plugin::raw::RawCommand;
 use crate::report::Progress;
 
@@ -89,11 +89,38 @@ impl Op {
     }
 }
 
+/// A program name to run via the operating system's PATH (e.g. `cargo`, `npm`).
+///
+/// Resolution through PATH (and `.exe`/PATHEXT on Windows) is left to
+/// [`std::process::Command`]; the newtype makes the program a distinct value
+/// instead of a bare positional string, so the run boundary stays explicit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandName(String);
+
+impl CommandName {
+    /// The program name as passed to `Command::new`.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for CommandName {
+    fn from(value: String) -> Self {
+        CommandName(value)
+    }
+}
+
+impl std::fmt::Display for CommandName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// One fully-expanded external command line (plan-time data, not an action).
 #[derive(Clone, Debug)]
 pub struct CommandInvocation {
     /// The program to invoke, resolved via PATH.
-    pub tool: String,
+    pub tool: CommandName,
     /// Arguments, placeholders already expanded.
     pub args: Vec<String>,
     /// Extra environment variables, layered over the inherited environment.
@@ -113,7 +140,7 @@ impl CommandInvocation {
                 .replace("{user}", &user_home)
         };
         CommandInvocation {
-            tool: raw.tool.clone(),
+            tool: raw.tool.clone().into(),
             args: raw.args.iter().map(|arg| expand(arg)).collect(),
             env: raw
                 .env
@@ -126,7 +153,7 @@ impl CommandInvocation {
     /// Run this invocation on the context's process runner.
     pub fn run(&self, ctx: &Ctx) -> Result<()> {
         ctx.runner
-            .run_with_env(Path::new(&self.tool), &self.args, &self.env)
+            .run_with_env(Path::new(self.tool.as_str()), &self.args, &self.env)
     }
 
     /// Run `commands` in order until one succeeds. A missing tool and a failing
@@ -152,7 +179,7 @@ impl CommandInvocation {
 #[derive(Clone, Debug)]
 pub struct RestoreEnv {
     /// Variable name.
-    pub name: String,
+    pub name: EnvVar,
     /// Value before apply; `None` means it did not exist (rollback deletes it).
     pub old: Option<String>,
 }

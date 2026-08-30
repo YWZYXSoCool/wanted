@@ -16,6 +16,10 @@ pub enum Error {
     #[error("manifest missing field: {field}")]
     MissingField { field: &'static str },
 
+    /// A name is not usable as a directory segment on this platform.
+    #[error("invalid name {name:?}: {detail}")]
+    InvalidName { name: String, detail: String },
+
     /// File / directory I/O failure, with the offending path.
     #[error("i/o at {path}: {source}")]
     Io {

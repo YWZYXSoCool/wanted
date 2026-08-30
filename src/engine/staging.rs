@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 use crate::engine::fs::Fs;
+use crate::fs_path::DirName;
 
 /// Handle to a staging area.
 pub struct Staging {
@@ -17,9 +18,12 @@ pub struct Staging {
 
 impl Staging {
     /// Construct (without creating) a staging directory isolated by a unique suffix.
-    pub fn new(root: &Path, name: &str) -> Staging {
+    pub fn new(root: &Path, name: &DirName) -> Staging {
         let nonce = unique_nonce();
-        Staging::from_dir(root.join(".staging").join(format!("{name}-{nonce}")))
+        Staging::from_dir(
+            root.join(".staging")
+                .join(format!("{}-{nonce}", name.as_str())),
+        )
     }
 
     /// Construct from an already-resolved path (the execution layer reproduces the

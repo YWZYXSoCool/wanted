@@ -5,22 +5,23 @@ use std::path::Path;
 use super::{Receipt, VarSnapshot};
 use crate::Version;
 use crate::engine::fs::MemFs;
-use crate::env::EnvOp;
+use crate::env::{EnvOp, EnvVar};
+use crate::fs_path::AppDir;
 
 fn sample() -> Receipt {
     Receipt {
         name: "golang".to_string(),
         version: Version::parse("1.23.0").unwrap(),
-        app_dir: "/root/.wanted/apps/golang".to_string(),
+        app_dir: AppDir::from("/root/.wanted/apps/golang"),
         vars: vec![
             VarSnapshot {
-                name: "PATH".to_string(),
+                name: EnvVar::from("PATH"),
                 op: EnvOp::Prepend,
                 value: "C:\\apps\\golang\\bin".to_string(),
                 old: Some("C:\\before".to_string()),
             },
             VarSnapshot {
-                name: "GOROOT".to_string(),
+                name: EnvVar::from("GOROOT"),
                 op: EnvOp::Set,
                 value: "C:\\apps\\golang".to_string(),
                 old: None,

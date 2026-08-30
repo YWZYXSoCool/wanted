@@ -17,7 +17,8 @@ use serde::{Deserialize, Serialize};
 use crate::Result;
 use crate::Version;
 use crate::engine::fs::Fs;
-use crate::env::EnvOp;
+use crate::env::{EnvOp, EnvVar};
+use crate::fs_path::AppDir;
 
 /// A single environment variable written by an install, with enough to reverse it.
 ///
@@ -27,7 +28,7 @@ use crate::env::EnvOp;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VarSnapshot {
     /// Variable name.
-    pub name: String,
+    pub name: EnvVar,
     /// How the install merged this variable.
     pub op: EnvOp,
     /// The segment/value the install applied (removed on uninstall for PATH-like vars).
@@ -44,7 +45,7 @@ pub struct Receipt {
     /// Installed version.
     pub version: Version,
     /// The installed tool root (under `apps`), removed wholesale on uninstall.
-    pub app_dir: String,
+    pub app_dir: AppDir,
     /// Environment variables written by the install, with their old values.
     pub vars: Vec<VarSnapshot>,
 }

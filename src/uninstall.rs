@@ -16,7 +16,7 @@ use crate::receipt::Receipt;
 /// variable. PATH-like variables drop only the segment this install added; `Set`
 /// restores the pre-apply value.
 pub fn apply_receipt(receipt: &Receipt, fs: &dyn Fs, env: &dyn EnvStore) -> Result<()> {
-    remove_app_dir(fs, Path::new(&receipt.app_dir))?;
+    remove_app_dir(fs, receipt.app_dir.as_path())?;
     for var in &receipt.vars {
         let applied = EnvDelta {
             name: var.name.clone(),

@@ -5,6 +5,7 @@ use wanted::cli::ToolSpec;
 use wanted::engine::execute;
 use wanted::engine::{Ctx, DEFAULT_PARALLEL_WORKERS, Fs, RealDownloader, RealFs, RealProcess};
 use wanted::env::store::RealEnvStore;
+use wanted::fs_path::{AppDir, DirName};
 use wanted::plugin::Manifest;
 use wanted::receipt::{Receipt, VarSnapshot};
 use wanted::report::{Progress, Reporter};
@@ -101,8 +102,8 @@ fn run() -> wanted::Result<()> {
             }
             Ok(())
         }
-        Commands::Remove { name } => remove_plugin(&name),
-        Commands::Uninstall { name } => uninstall(&name),
+        Commands::Remove { name } => remove_plugin(&DirName::try_from(name)?),
+        Commands::Uninstall { name } => uninstall(&DirName::try_from(name)?),
         Commands::Upgrade => upgrade(),
         Commands::List => list(),
     }
@@ -186,7 +187,7 @@ fn install(
     let env = RealEnvStore::new();
     let ref_plan = &plans[0];
     let snapshots = env_snapshots(ref_plan, &env)?;
-    let reporter = TerminalReporter::new(&ref_plan.name);
+    let reporter = TerminalReporter::new(ref_plan.name.as_str());
     let ctx = Ctx {
         root: store.root().to_path_buf(),
         fs: &fs,
@@ -200,9 +201,9 @@ fn install(
     reporter.finish();
 
     let receipt = Receipt {
-        name: plan.name.clone(),
+        name: plan.name.to_string(),
         version: plan.version.clone(),
-        app_dir: plan.dest_dir.to_string_lossy().into_owned(),
+        app_dir: AppDir::from_path(&plan.dest_dir),
         vars: snapshots,
     };
     receipt.write(&fs, &store.receipt_path(&plan.name))?;
@@ -230,7 +231,7 @@ fn env_snapshots(
 }
 
 /// Remove a registered plugin manifest (the inverse of `add`).
-fn remove_plugin(name: &str) -> wanted::Result<()> {
+fn remove_plugin(name: &DirName) -> wanted::Result<()> {
     let fs = RealFs;
     let path = plugins_dir().join(format!("{name}.toml"));
     if !fs.exists(&path)? {
@@ -245,7 +246,7 @@ fn remove_plugin(name: &str) -> wanted::Result<()> {
 
 /// Uninstall a tool: restore its environment from the receipt and clear the app
 /// directory.
-fn uninstall(name: &str) -> wanted::Result<()> {
+fn uninstall(name: &DirName) -> wanted::Result<()> {
     let store = store_at_cwd();
     let fs = RealFs;
     let env = RealEnvStore::new();

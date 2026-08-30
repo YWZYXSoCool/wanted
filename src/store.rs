@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use crate::Result;
 use crate::engine::fs::Fs;
+use crate::fs_path::DirName;
 
 /// Layout accessor for the persistent root directory.
 pub struct Store {
@@ -37,7 +38,7 @@ impl Store {
     }
 
     /// The receipt path for one tool.
-    pub fn receipt_path(&self, name: &str) -> PathBuf {
+    pub fn receipt_path(&self, name: &DirName) -> PathBuf {
         self.installed_dir().join(name).join("receipt.toml")
     }
 

@@ -12,7 +12,8 @@ use crate::Version;
 use crate::engine::ops::{CommandInvocation, Op};
 use crate::engine::staging::Staging;
 use crate::engine::url::Url;
-use crate::env::EnvDelta;
+use crate::env::{EnvDelta, EnvVar};
+use crate::fs_path::DirName;
 use crate::plugin::{AssetMap, DEFAULT_SOURCE, InstallMethod, Manifest, Target};
 
 /// Install-time choices supplied by the user: the asset source and any optional
@@ -28,8 +29,8 @@ pub struct Selection<'a> {
 /// A complete install plan (two phases: staged ops + commit ops).
 #[derive(Clone, Debug)]
 pub struct Plan {
-    /// Tool name.
-    pub name: String,
+    /// Tool name (a validated directory segment, also used for the receipt).
+    pub name: DirName,
     /// Version to install.
     pub version: Version,
     /// Staging directory.
@@ -133,13 +134,14 @@ impl Manifest {
         selection: &Selection,
     ) -> Result<Plan> {
         let url = self.install_url(target, version, selection.source)?;
-        let base_dir = PathBuf::from(&self.install.base_dir);
+        let base_dir = &self.install.base_dir;
         let staging = Staging::new(&root.join(".wanted"), &self.meta.name);
         let staging_dir = staging.dir().to_path_buf();
         let download_to = staging_dir.join("downloads").join(url.file_name());
         let app_dir = staging_dir.join("app");
-        let dest_dir = root.join(".wanted").join("apps").join(&base_dir);
-        let deltas = self.env_deltas(dest_dir.parent().unwrap_or(Path::new("")), version)?;
+        let dest_dir = root.join(".wanted").join("apps").join(base_dir);
+        let deltas =
+            self.env_deltas(dest_dir.parent().unwrap_or(Path::new("")), target, version)?;
 
         let mut staged_ops = vec![
             Op::Download {
@@ -193,13 +195,14 @@ impl Manifest {
             ));
         }
         let url = self.install_url(target, version, selection.source)?;
-        let base_dir = PathBuf::from(&self.install.base_dir);
+        let base_dir = &self.install.base_dir;
         let staging = Staging::new(&root.join(".wanted"), &self.meta.name);
         let staging_dir = staging.dir().to_path_buf();
         let download_to = staging_dir.join("downloads").join(url.file_name());
-        let dest_dir = root.join(".wanted").join("apps").join(&base_dir);
+        let dest_dir = root.join(".wanted").join("apps").join(base_dir);
         let expanded = expand_installer_args(args, &dest_dir, version);
-        let deltas = self.env_deltas(dest_dir.parent().unwrap_or(Path::new("")), version)?;
+        let deltas =
+            self.env_deltas(dest_dir.parent().unwrap_or(Path::new("")), target, version)?;
 
         let staged_ops = vec![
             Op::Download {
@@ -245,11 +248,12 @@ impl Manifest {
             .ok_or_else(|| crate::Error::UnsupportedPlatform {
                 target: target.triplet(),
             })?;
-        let base_dir = PathBuf::from(&self.install.base_dir);
+        let base_dir = &self.install.base_dir;
         let staging = Staging::new(&root.join(".wanted"), &self.meta.name);
         let staging_dir = staging.dir().to_path_buf();
-        let dest_dir = root.join(".wanted").join("apps").join(&base_dir);
-        let deltas = self.env_deltas(dest_dir.parent().unwrap_or(Path::new("")), version)?;
+        let dest_dir = root.join(".wanted").join("apps").join(base_dir);
+        let deltas =
+            self.env_deltas(dest_dir.parent().unwrap_or(Path::new("")), target, version)?;
         let commands = raw_commands
             .iter()
             .map(|raw| CommandInvocation::from_raw(raw, &dest_dir, version))
@@ -333,13 +337,24 @@ impl Manifest {
             })
     }
 
-    /// Compute the pure deltas from the manifest's env declarations (no side effects).
-    fn env_deltas(&self, apps_root: &Path, version: &Version) -> Result<Vec<EnvDelta>> {
+    /// Compute the pure deltas from the manifest's env declarations. A matching
+    /// `env_by_platform` entry for `target` overrides the variable's template.
+    fn env_deltas(
+        &self,
+        apps_root: &Path,
+        target: &Target,
+        version: &Version,
+    ) -> Result<Vec<EnvDelta>> {
         let mut deltas = Vec::new();
         let base = apps_root.join(&self.install.base_dir);
         let user_home = crate::env::user_home();
-        for (name, template) in &self.env {
-            let op = if name == "PATH" {
+        let platform_env = self.env_by_platform.get(&target.triplet());
+        for (raw_name, template) in &self.env {
+            let name = EnvVar::from(raw_name.as_str());
+            let template = platform_env
+                .and_then(|vars| vars.get(raw_name))
+                .unwrap_or(template);
+            let op = if name.is_path() {
                 match self.install.env_box {
                     crate::plugin::EnvBox::Prepend => crate::env::EnvOp::Prepend,
                     crate::plugin::EnvBox::Append => crate::env::EnvOp::Append,
@@ -348,7 +363,7 @@ impl Manifest {
                 crate::env::EnvOp::Set
             };
             deltas.push(EnvDelta {
-                name: name.clone(),
+                name,
                 value: resolve_template(template, &base, &user_home, version),
                 op,
             });
@@ -365,6 +380,8 @@ fn resolve_template(template: &str, base: &Path, user_home: &str, version: &Vers
     let value_path = Path::new(&substituted);
     if template.starts_with('$') || value_path.is_absolute() {
         substituted
+    } else if value_path == Path::new(".") || value_path.as_os_str().is_empty() {
+        base.to_string_lossy().into_owned()
     } else {
         base.join(value_path).to_string_lossy().into_owned()
     }

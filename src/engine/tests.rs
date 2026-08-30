@@ -13,7 +13,7 @@ use crate::engine::fs::{Fs, MemFs};
 use crate::engine::ops::Op;
 use crate::engine::plan::Selection;
 use crate::engine::{Ctx, Downloader, Url};
-use crate::env::{EnvStore, MemEnvStore};
+use crate::env::{EnvStore, EnvVar, MemEnvStore};
 use crate::plugin::{Manifest, Target};
 use crate::report::{Progress, Reporter, SilentReporter};
 
@@ -30,6 +30,28 @@ base_dir = "golang"
 [env]
 PATH = "bin"
 GOROOT = "."
+"#;
+
+/// A manifest declaring per-platform env overrides: Windows flattens the install
+/// to the base (`.`) while other platforms keep the binaries under `bin/`.
+const ENV_PLATFORM_TOML: &str = r#"
+[meta]
+name = "node"
+version = "1.0.0"
+
+[install]
+method = "download"
+base_dir = "node"
+
+[install.asset]
+"x86_64-pc-windows-msvc" = { default = "https://n/{version}-win.zip" }
+"x86_64-unknown-linux-gnu" = { default = "https://n/{version}-linux.tar.gz" }
+
+[env]
+PATH = "bin"
+
+[env_by_platform."x86_64-pc-windows-msvc"]
+PATH = "."
 "#;
 
 /// A stable Windows platform target (independent of the host) for reproducibility.
@@ -125,7 +147,7 @@ fn plan_is_pure_and_well_structured() {
     let manifest = Manifest::parse(GOLANG_TOML).unwrap();
     let plan = plan_for(&manifest, Path::new("/root"));
 
-    assert_eq!(plan.name, "golang");
+    assert_eq!(plan.name.as_str(), "golang");
     assert_eq!(plan.version.to_string(), "1.23.0");
     assert_eq!(plan.staged_ops.len(), 2);
     assert!(matches!(plan.staged_ops[0], Op::Download { .. }));
@@ -133,6 +155,37 @@ fn plan_is_pure_and_well_structured() {
     assert_eq!(plan.commit_ops.len(), 1);
     assert!(matches!(plan.commit_ops[0], Op::WriteEnv { .. }));
     assert_eq!(plan.dest_dir, Path::new("/root/.wanted/apps/golang"));
+}
+
+#[test]
+fn env_is_overridden_per_platform() {
+    let manifest = Manifest::parse(ENV_PLATFORM_TOML).unwrap();
+
+    let root = Path::new("/root");
+    let node_dir = root.join(".wanted").join("apps").join("node");
+
+    let windows = manifest
+        .plan(root, &win_target(), &vsn(), &Selection::default())
+        .unwrap()
+        .env_deltas()
+        .into_iter()
+        .find(|d| d.name.as_str() == "PATH")
+        .unwrap();
+    assert_eq!(windows.value, node_dir.to_string_lossy());
+
+    let linux = manifest
+        .plan(
+            root,
+            &Target::parts("x86_64", "linux", "gnu"),
+            &vsn(),
+            &Selection::default(),
+        )
+        .unwrap()
+        .env_deltas()
+        .into_iter()
+        .find(|d| d.name.as_str() == "PATH")
+        .unwrap();
+    assert_eq!(linux.value, node_dir.join("bin").to_string_lossy());
 }
 
 #[test]
@@ -159,7 +212,7 @@ fn execute_commits_and_persists_env() {
     assert!(!fs.exists(&staging_dir).unwrap());
 
     let expected_path = root.join(".wanted").join("apps").join("golang").join("bin");
-    let actual = env.read("PATH").unwrap().unwrap();
+    let actual = env.read(&EnvVar::from("PATH")).unwrap().unwrap();
     assert_eq!(actual, expected_path.to_string_lossy());
 }
 
@@ -239,17 +292,17 @@ struct FailingEnv {
 }
 
 impl EnvStore for FailingEnv {
-    fn read(&self, name: &str) -> crate::Result<Option<String>> {
+    fn read(&self, name: &EnvVar) -> crate::Result<Option<String>> {
         self.inner.read(name)
     }
-    fn write(&self, name: &str, value: &str) -> crate::Result<()> {
-        if name == "PATH" {
+    fn write(&self, name: &EnvVar, value: &str) -> crate::Result<()> {
+        if name.is_path() {
             Err(Error::Other("simulated env write failure".into()))
         } else {
             self.inner.write(name, value)
         }
     }
-    fn remove(&self, name: &str) -> crate::Result<()> {
+    fn remove(&self, name: &EnvVar) -> crate::Result<()> {
         self.inner.remove(name)
     }
 }

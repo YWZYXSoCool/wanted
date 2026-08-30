@@ -11,6 +11,7 @@ pub mod cli;
 pub mod engine;
 pub mod env;
 pub mod error;
+pub mod fs_path;
 pub mod plugin;
 pub mod receipt;
 pub mod report;
