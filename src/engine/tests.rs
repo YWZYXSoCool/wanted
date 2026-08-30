@@ -408,7 +408,12 @@ fn plan_url_expands_version_build_metadata_into_date() {
     let manifest = Manifest::parse(PBS_TOML).unwrap();
     let version = Version::parse("3.13.0+20260825").unwrap();
     let plan = manifest
-        .plan(Path::new("/root"), &win_target(), &version, &Selection::default())
+        .plan(
+            Path::new("/root"),
+            &win_target(),
+            &version,
+            &Selection::default(),
+        )
         .unwrap();
     assert_eq!(
         download_url(&plan),

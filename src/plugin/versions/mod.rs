@@ -155,7 +155,10 @@ fn walk_candidates(value: &serde_json::Value, segments: &[&str]) -> Vec<String> 
         let Some(items) = array else {
             return Vec::new();
         };
-        return items.iter().flat_map(|item| walk_candidates(item, rest)).collect();
+        return items
+            .iter()
+            .flat_map(|item| walk_candidates(item, rest))
+            .collect();
     }
     value
         .get(head)

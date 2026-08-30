@@ -331,7 +331,10 @@ default = { url = "https://ex/pbs/latest", field = "assets[].name", strip = "cpy
     let source = manifest.install.versions_source_for(None).unwrap();
     assert_eq!(source.field.as_deref(), Some("assets[].name"));
     assert_eq!(source.strip.as_deref(), Some("cpython-"));
-    assert_eq!(source.suffix.as_deref(), Some("-x86_64-unknown-linux-gnu-install_only.tar.gz"));
+    assert_eq!(
+        source.suffix.as_deref(),
+        Some("-x86_64-unknown-linux-gnu-install_only.tar.gz")
+    );
 }
 
 #[test]

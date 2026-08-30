@@ -183,10 +183,7 @@ fn nested_path_dedups_repeated_versions() {
     }"#;
     let versions = spec.parse(body).unwrap();
     assert_eq!(
-        versions
-            .iter()
-            .filter(|v| *v == "3.13.0+20260825")
-            .count(),
+        versions.iter().filter(|v| *v == "3.13.0+20260825").count(),
         1
     );
 }
