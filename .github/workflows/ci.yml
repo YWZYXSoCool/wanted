@@ -93,6 +93,19 @@ jobs:
           mkdir -p out
           cp "target/release/wanted${{ steps.asset.outputs.exe }}" "out/${{ steps.asset.outputs.name }}"
 
+      # winget portable packages expose a command named after the exe inside
+      # the archive, so ship the Windows binary as a zip containing a bare
+      # wanted.exe (the shape winget-pkgs expects). Self-upgrade keeps using
+      # the bare exe + its .sha256 companion; this zip is winget-only.
+      - name: Package portable zip (windows)
+        shell: pwsh
+        if: matrix.tag == 'windows'
+        run: |
+          $dir = "$env:RUNNER_TEMP\wantedzip"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item "out/wanted-$env:GITHUB_REF_NAME-windows-x86_64.exe" "$dir\wanted.exe"
+          Compress-Archive "$dir\wanted.exe" "out/wanted-$env:GITHUB_REF_NAME-windows-x86_64.zip" -CompressionLevel Optimal
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
