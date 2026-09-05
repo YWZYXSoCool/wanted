@@ -28,6 +28,12 @@ cargo install wanted
 cargo build --release
 ```
 
+在 Windows 上也可以用 winget 安装（新版发布会自动推送；首个版本为手动提交）：
+
+```bash
+winget install -e -i YWZYXSoCool.Wanted
+```
+
 ## 快速开始
 
 注册一份插件清单，然后安装它：

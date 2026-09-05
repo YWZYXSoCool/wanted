@@ -1,0 +1,22 @@
+name: Publish to Winget
+
+on:
+  release:
+    types: [released]
+
+jobs:
+  publish:
+    name: Winget
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Opens a winget-pkgs manifest PR for each published release. Needs the
+      # first version to already exist in microsoft/winget-pkgs (submit 0.1.0
+      # manually once) and a classic PAT in WINGET_TOKEN; requires a fork of
+      # microsoft/winget-pkgs under the token's account.
+      - uses: vedantmgoyal2009/winget-releaser@latest
+        with:
+          identifier: YWZYXSoCool.Wanted
+          installers-regex: '-windows-x86_64\.exe$'
+          token: ${{ secrets.WINGET_TOKEN }}

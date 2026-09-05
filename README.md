@@ -43,6 +43,13 @@ cargo install wanted
 cargo build --release
 ```
 
+On Windows you can also install it with winget (new releases are published
+automatically; the initial version was submitted manually):
+
+```bash
+winget install -e -i YWZYXSoCool.Wanted
+```
+
 ## Quick start
 
 Register a plugin manifest, then install it:
