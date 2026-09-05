@@ -36,8 +36,11 @@ no platform daemon — just a single self-contained binary and a directory.
 Requires a Rust toolchain.
 
 ```bash
+# from crates.io (installs `wanted` onto your system's PATH)
+cargo install wanted
+
+# or build from source (binary at target/release/wanted)
 cargo build --release
-# binary at target/release/wanted
 ```
 
 ## Quick start

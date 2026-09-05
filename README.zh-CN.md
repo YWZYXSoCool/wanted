@@ -21,8 +21,11 @@
 需要 Rust 工具链。
 
 ```bash
+# 从 crates.io 安装（把 `wanted` 装到系统的 PATH 上）
+cargo install wanted
+
+# 或从源码构建（二进制位于 target/release/wanted）
 cargo build --release
-# 二进制位于 target/release/wanted
 ```
 
 ## 快速开始
